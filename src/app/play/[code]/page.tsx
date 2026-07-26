@@ -1,0 +1,413 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
+import { useGame } from "@/lib/useGame";
+import {
+  getLocalAnswers,
+  getOrCreateParticipant,
+  setLocalAnswer,
+  submitAnswer,
+} from "@/lib/participant";
+import type { QuestionResult } from "@/lib/types";
+import { OPTION_LETTERS } from "@/lib/types";
+import { Shield, Spinner, StatusPill } from "@/components/ui";
+
+type SaveState = "saving" | "saved" | "error";
+
+export default function PlayPage() {
+  const params = useParams<{ code: string }>();
+  const code = (params.code ?? "").toUpperCase();
+  const { game, questions, loading, error } = useGame(code);
+
+  const [participantId, setParticipantId] = useState<string | null>(null);
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
+  const [banner, setBanner] = useState<string | null>(null);
+  const [idx, setIdx] = useState(0);
+  const [results, setResults] = useState<QuestionResult[] | null>(null);
+  const jumpedRef = useRef(false);
+
+  /* join + restore local answers */
+  useEffect(() => {
+    if (!game?.id) return;
+    setAnswers(getLocalAnswers(game.id));
+    getOrCreateParticipant(code, game.id)
+      .then(setParticipantId)
+      .catch((e) => setJoinError(e instanceof Error ? e.message : "Could not join."));
+  }, [game?.id, code]);
+
+  /* start on the first unanswered question when the game opens */
+  useEffect(() => {
+    if (jumpedRef.current || game?.status !== "open" || questions.length === 0) return;
+    jumpedRef.current = true;
+    const first = questions.findIndex((q) => answers[q.id] === undefined);
+    if (first > 0) setIdx(first);
+  }, [game?.status, questions, answers]);
+
+  /* results once the host reveals them */
+  useEffect(() => {
+    if (game?.status !== "results") {
+      setResults(null);
+      return;
+    }
+    let stop = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/game/${code}/results`, { cache: "no-store" });
+        if (res.ok && !stop) setResults((await res.json()).results);
+      } catch {
+        /* transient */
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [game?.status, code]);
+
+  const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
+
+  const choose = useCallback(
+    async (questionId: string, choice: number) => {
+      if (!game || game.status !== "open" || !participantId) return;
+      setBanner(null);
+      setAnswers((a) => ({ ...a, [questionId]: choice }));
+      setSaveState((s) => ({ ...s, [questionId]: "saving" }));
+      try {
+        await submitAnswer(code, {
+          participant_id: participantId,
+          question_id: questionId,
+          choice_index: choice,
+        });
+        setSaveState((s) => ({ ...s, [questionId]: "saved" }));
+        setLocalAnswer(game.id, questionId, choice);
+        // hop to the next unanswered question, if there is one
+        const local = { ...getLocalAnswers(game.id), [questionId]: choice };
+        const n = questions.length;
+        const start = questions.findIndex((q) => q.id === questionId);
+        for (let step = 1; step <= n; step++) {
+          const cand = (start + step) % n;
+          if (local[questions[cand].id] === undefined) {
+            setTimeout(() => setIdx(cand), 350);
+            break;
+          }
+        }
+      } catch (e) {
+        setSaveState((s) => ({ ...s, [questionId]: "error" }));
+        setBanner(e instanceof Error ? e.message : "Could not save your answer.");
+      }
+    },
+    [game, participantId, code, questions]
+  );
+
+  /* ── render states ────────────────────────────────────────── */
+
+  if (loading)
+    return (
+      <PhoneShell>
+        <Spinner label="Finding your game…" />
+      </PhoneShell>
+    );
+
+  if (error || !game)
+    return (
+      <PhoneShell>
+        <div className="card p-6 text-center">
+          <p className="font-semibold text-navy-900">Hmm.</p>
+          <p className="mt-1 text-sm text-steel-600">{error ?? "Game not found."}</p>
+        </div>
+      </PhoneShell>
+    );
+
+  const q = questions[Math.min(idx, Math.max(questions.length - 1, 0))];
+
+  return (
+    <PhoneShell>
+      {/* header */}
+      <header className="mb-4 flex items-center gap-3">
+        <Shield className="h-9 w-9 text-steel-600" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-steel-500">
+            Guardian Gauntlet
+          </div>
+          <div className="truncate text-sm font-bold text-navy-900">{game.title}</div>
+        </div>
+        <StatusPill status={game.status} />
+      </header>
+
+      {banner && (
+        <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-900">
+          {banner}
+        </div>
+      )}
+      {joinError && (
+        <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+          {joinError}
+        </div>
+      )}
+
+      {game.status === "draft" && (
+        <div className="card p-8 text-center">
+          <div className="pulse-dot mx-auto mb-4 h-3 w-3 rounded-full bg-gold-500" />
+          <h1 className="text-xl font-extrabold text-navy-900">You&apos;re in!</h1>
+          <p className="mt-2 text-sm text-steel-600">
+            Questions open soon. Keep this page handy — it updates by itself.
+          </p>
+        </div>
+      )}
+
+      {game.status === "open" && q && (
+        <>
+          {/* progress */}
+          <div className="card mb-3 p-4">
+            <div className="flex items-center justify-between text-xs font-semibold text-steel-600">
+              <span>
+                {answeredCount} of {questions.length} answered
+              </span>
+              <span>Answer in any order · change anytime</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-steel-100">
+              <div
+                className="h-full rounded-full bg-steel-500 transition-all duration-500"
+                style={{
+                  width: `${questions.length ? (answeredCount / questions.length) * 100 : 0}%`,
+                }}
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {questions.map((qq, i) => {
+                const answered = answers[qq.id] !== undefined;
+                const isCurrent = i === idx;
+                return (
+                  <button
+                    key={qq.id}
+                    onClick={() => setIdx(i)}
+                    aria-label={`Question ${i + 1}`}
+                    className={
+                      "flex h-7 w-7 items-center justify-center rounded-lg text-[11px] font-bold transition-colors " +
+                      (isCurrent
+                        ? "bg-navy-800 text-white ring-2 ring-gold-500"
+                        : answered
+                          ? "bg-steel-500 text-white"
+                          : "bg-steel-100 text-steel-600")
+                    }
+                  >
+                    {i + 1}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* question */}
+          <div className="card p-5" key={q.id}>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wide text-steel-500">
+                Question {idx + 1} of {questions.length}
+              </span>
+              <SaveBadge state={saveState[q.id]} answered={answers[q.id] !== undefined} />
+            </div>
+            <h2 className="text-lg font-extrabold leading-snug text-navy-900">
+              {q.prompt}
+            </h2>
+            <ul className="mt-4 space-y-2.5">
+              {q.options.map((opt, oi) => {
+                const selected = answers[q.id] === oi;
+                return (
+                  <li key={oi}>
+                    <button
+                      onClick={() => choose(q.id, oi)}
+                      className={
+                        "flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-colors " +
+                        (selected
+                          ? "border-navy-800 bg-navy-800 text-white"
+                          : "border-steel-200 bg-white text-navy-900 active:bg-steel-50")
+                      }
+                    >
+                      <span
+                        className={
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-extrabold " +
+                          (selected
+                            ? "bg-gold-500 text-navy-950"
+                            : "bg-steel-100 text-steel-700")
+                        }
+                      >
+                        {OPTION_LETTERS[oi]}
+                      </span>
+                      <span className="text-[15px] font-semibold leading-snug">{opt}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="mt-4 flex items-center justify-between">
+              <button
+                className="btn btn-ghost"
+                disabled={idx === 0}
+                onClick={() => setIdx((i) => Math.max(0, i - 1))}
+              >
+                ← Prev
+              </button>
+              <button
+                className="btn btn-ghost"
+                disabled={idx >= questions.length - 1}
+                onClick={() => setIdx((i) => Math.min(questions.length - 1, i + 1))}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+
+          {answeredCount === questions.length && questions.length > 0 && (
+            <p className="mt-3 text-center text-sm font-medium text-steel-600">
+              All answered 🎉 You can still change answers until the host locks the
+              game.
+            </p>
+          )}
+        </>
+      )}
+
+      {game.status === "locked" && (
+        <div className="card p-8 text-center">
+          <div className="mx-auto mb-3 text-4xl">🔒</div>
+          <h1 className="text-xl font-extrabold text-navy-900">Answers are locked</h1>
+          <p className="mt-2 text-sm text-steel-600">
+            You answered {answeredCount} of {questions.length}. Eyes on the big
+            screen for the results!
+          </p>
+        </div>
+      )}
+
+      {game.status === "results" && (
+        <ResultsView questions={questions} results={results} answers={answers} />
+      )}
+
+      <footer className="mt-8 pb-6 text-center text-[11px] font-medium text-steel-400">
+        Guardian Pharmacy · Guardian Gauntlet
+      </footer>
+    </PhoneShell>
+  );
+}
+
+/* ────────────────────────── pieces ────────────────────────── */
+
+function PhoneShell({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto min-h-screen w-full max-w-md px-4 py-5">{children}</main>
+  );
+}
+
+function SaveBadge({ state, answered }: { state?: SaveState; answered: boolean }) {
+  if (state === "saving")
+    return <span className="text-xs font-semibold text-steel-500">Saving…</span>;
+  if (state === "error")
+    return <span className="text-xs font-semibold text-red-600">Not saved — tap again</span>;
+  if (answered)
+    return <span className="text-xs font-semibold text-emerald-700">Saved ✓</span>;
+  return null;
+}
+
+function ResultsView({
+  questions,
+  results,
+  answers,
+}: {
+  questions: { id: string; prompt: string; options: string[] }[];
+  results: QuestionResult[] | null;
+  answers: Record<string, number>;
+}) {
+  if (!results)
+    return (
+      <div className="card p-8 text-center text-sm text-steel-600">
+        Loading results…
+      </div>
+    );
+
+  const gradable = results.filter((r) => answers[r.question_id] !== undefined);
+  const score = gradable.filter((r) => answers[r.question_id] === r.correct_index).length;
+
+  return (
+    <div className="space-y-3">
+      <div className="card bg-navy-900 p-6 text-center">
+        <div className="text-xs font-bold uppercase tracking-[0.2em] text-steel-400">
+          Your score
+        </div>
+        <div className="mt-1 text-5xl font-extrabold text-white">
+          {score}
+          <span className="text-2xl font-bold text-steel-400"> / {results.length}</span>
+        </div>
+        <p className="mt-2 text-xs text-steel-400">
+          Scored on your own device — answers were anonymous.
+        </p>
+      </div>
+
+      {results.map((r, i) => {
+        const q = questions.find((x) => x.id === r.question_id);
+        if (!q) return null;
+        const mine = answers[r.question_id];
+        return (
+          <div key={r.question_id} className="card p-4">
+            <div className="text-xs font-bold uppercase tracking-wide text-steel-500">
+              Question {i + 1}
+            </div>
+            <p className="mt-1 text-sm font-bold text-navy-900">{q.prompt}</p>
+            <ul className="mt-3 space-y-1.5">
+              {q.options.map((opt, oi) => {
+                const isCorrect = oi === r.correct_index;
+                const isMine = mine === oi;
+                const pct = r.total ? Math.round(((r.counts[oi] ?? 0) / r.total) * 100) : 0;
+                return (
+                  <li
+                    key={oi}
+                    className={
+                      "rounded-lg border px-3 py-2 text-sm " +
+                      (isCorrect
+                        ? "border-gold-500 bg-gold-100"
+                        : isMine
+                          ? "border-steel-400 bg-steel-50"
+                          : "border-steel-100")
+                    }
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 font-medium text-navy-900">
+                        <b className="mr-1.5">{OPTION_LETTERS[oi]}</b>
+                        {opt}
+                      </span>
+                      <span className="shrink-0 text-xs font-bold tabular-nums text-steel-600">
+                        {pct}%
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
+                      <div
+                        className={
+                          "h-full rounded-full " +
+                          (isCorrect ? "bg-gold-500" : "bg-steel-400")
+                        }
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    {(isCorrect || isMine) && (
+                      <div className="mt-1 flex gap-2 text-[11px] font-bold">
+                        {isCorrect && <span className="text-gold-600">✓ Correct answer</span>}
+                        {isMine && (
+                          <span
+                            className={
+                              isCorrect ? "text-emerald-700" : "text-steel-600"
+                            }
+                          >
+                            {isCorrect ? "You got it!" : "Your pick"}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

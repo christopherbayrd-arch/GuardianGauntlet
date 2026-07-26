@@ -1,0 +1,182 @@
+@import "tailwindcss";
+
+/*
+  Guardian Gauntlet theme — Guardian Pharmacy palette
+  Steel blue pulled from guardianpharmacy.com (#7B9AC2), grounded with
+  deep navy and lifted with a warm gold accent for correct answers.
+*/
+@theme {
+  --color-navy-950: #0a1526;
+  --color-navy-900: #101f3a;
+  --color-navy-800: #182c50;
+  --color-navy-700: #223a67;
+  --color-navy-600: #2e4a80;
+
+  --color-steel-700: #3f639b;
+  --color-steel-600: #5a7fb1;
+  --color-steel-500: #7b9ac2;
+  --color-steel-400: #98b1d2;
+  --color-steel-300: #b7c8e0;
+  --color-steel-200: #d4deee;
+  --color-steel-100: #e8eef7;
+  --color-steel-50: #f4f7fb;
+
+  --color-gold-600: #c9952f;
+  --color-gold-500: #e9b44c;
+  --color-gold-400: #f2c76f;
+  --color-gold-100: #fdf3dd;
+}
+
+@layer base {
+  html {
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+  }
+  body {
+    background-color: var(--color-steel-50);
+    color: var(--color-navy-900);
+  }
+}
+
+@layer components {
+  .card {
+    background-color: white;
+    border: 1px solid var(--color-steel-200);
+    border-radius: 1rem;
+    box-shadow: 0 1px 2px rgb(16 31 58 / 0.06);
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 150ms, color 150ms, border-color 150ms, opacity 150ms;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background-color: var(--color-navy-800);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-navy-700);
+  }
+  .btn-steel {
+    background-color: var(--color-steel-600);
+    color: white;
+  }
+  .btn-steel:hover:not(:disabled) {
+    background-color: var(--color-steel-700);
+  }
+  .btn-ghost {
+    background-color: var(--color-steel-100);
+    color: var(--color-navy-800);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--color-steel-200);
+  }
+  .btn-danger {
+    background-color: #fef2f2;
+    color: #b91c1c;
+    border-color: #fecaca;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #fee2e2;
+  }
+  .btn-gold {
+    background-color: var(--color-gold-500);
+    color: var(--color-navy-950);
+  }
+  .btn-gold:hover:not(:disabled) {
+    background-color: var(--color-gold-400);
+  }
+  .input {
+    width: 100%;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-steel-300);
+    background-color: white;
+    padding: 0.5rem 0.75rem;
+    color: var(--color-navy-900);
+    outline: none;
+  }
+  .input:focus {
+    border-color: var(--color-steel-500);
+    box-shadow: 0 0 0 3px var(--color-steel-200);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    padding: 0.125rem 0.625rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+}
+
+/* Slide transitions for the big-screen display */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.slide-in {
+  animation: slide-in 450ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.bar-grow {
+  transform-origin: left center;
+  animation: bar-grow 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Auto-advance progress bar on the display */
+@keyframes ticker {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+/* Hide the cursor when it has been idle on the display page */
+.cursor-idle,
+.cursor-idle * {
+  cursor: none !important;
+}
