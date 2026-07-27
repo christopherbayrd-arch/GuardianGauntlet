@@ -11,6 +11,7 @@ import type {
   Game,
   GameStats,
   GameStatus,
+  LeaderboardEntry,
 } from "@/lib/types";
 import { OPTION_LETTERS } from "@/lib/types";
 import { CopyButton, Spinner, StatusPill } from "@/components/ui";
@@ -20,6 +21,7 @@ interface Detail {
   questions: AdminQuestion[];
   stats: GameStats;
   distributions: Distribution[];
+  leaderboard: LeaderboardEntry[];
 }
 
 const MODES: { status: GameStatus; label: string; desc: string }[] = [
@@ -27,6 +29,7 @@ const MODES: { status: GameStatus; label: string; desc: string }[] = [
   { status: "open", label: "2 · Open", desc: "Phones can answer. Big screen cycles the questions." },
   { status: "locked", label: "3 · Lock", desc: "Submissions stop instantly, everywhere." },
   { status: "results", label: "4 · Results", desc: "Walk through the answers on the big screen." },
+  { status: "leaderboard", label: "5 · Leaderboard", desc: "Crown the winners — top 10 on the big screen." },
 ];
 
 export default function GameConsolePage() {
@@ -38,6 +41,7 @@ export default function GameConsolePage() {
   const [questions, setQuestions] = useState<AdminQuestion[]>([]);
   const [stats, setStats] = useState<GameStats | null>(null);
   const [distributions, setDistributions] = useState<Distribution[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null); // question id | "new" | "bulk" | null
@@ -64,6 +68,7 @@ export default function GameConsolePage() {
       setGame(d.game);
       setStats(d.stats);
       setDistributions(d.distributions);
+      setLeaderboard(d.leaderboard ?? []);
       if (editingRef.current === null) setQuestions(d.questions);
       setError(null);
     } catch (e) {
@@ -158,6 +163,27 @@ export default function GameConsolePage() {
     }
   };
 
+  const removeParticipant = async (pid: string, name: string) => {
+    if (
+      !confirm(
+        `Remove ${name} from this game? Their answers are deleted too. ` +
+          `Use this for duplicate or abandoned entries.`
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await adminFetch(`/api/admin/games/${gameId}/participants/${pid}`, {
+        method: "DELETE",
+      });
+      await load();
+    } catch (e) {
+      if (!authFail(e)) setError(e instanceof Error ? e.message : "Remove failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const action = async (kind: "reset" | "duplicate" | "delete") => {
     const confirms: Record<string, string> = {
       reset:
@@ -234,7 +260,7 @@ export default function GameConsolePage() {
         <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-steel-600">
           Game mode
         </h2>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
           {MODES.map((m) => {
             const active = game.status === m.status;
             return (
@@ -423,6 +449,109 @@ export default function GameConsolePage() {
                 Tip: talk through the guesses first, then hit Reveal.
               </p>
             </>
+          )}
+        </section>
+      )}
+
+      {/* Standings preview */}
+      {(game.status === "locked" ||
+        game.status === "results" ||
+        game.status === "leaderboard") && (
+        <section className="card mb-6 p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
+              Leaderboard{game.status === "leaderboard" ? " — live on the big screen" : " preview"}
+            </h2>
+            {game.status !== "leaderboard" && (
+              <span className="text-xs text-steel-600">
+                Only you can see this until you switch to <b>5 · Leaderboard</b>.
+              </span>
+            )}
+          </div>
+          {leaderboard.length === 0 ? (
+            <p className="rounded-xl bg-steel-50 p-4 text-sm text-steel-600">
+              No named players yet.
+            </p>
+          ) : (
+            <ol className="grid grid-cols-1 gap-x-8 gap-y-1.5 md:grid-cols-2">
+              {leaderboard.slice(0, 10).map((e, i) => (
+                <li
+                  key={e.participant_id ?? `${e.rank}-${e.first_name}-${e.last_name}-${i}`}
+                  className={
+                    "group flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm " +
+                    (e.rank === 1 ? "bg-gold-100" : "bg-steel-50")
+                  }
+                >
+                  <span className="w-6 shrink-0 text-right font-extrabold tabular-nums text-navy-800">
+                    {e.rank}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-semibold text-navy-900">
+                    {e.first_name} {e.last_name}
+                  </span>
+                  <span className="shrink-0 text-xs font-bold tabular-nums text-steel-600">
+                    {e.correct} correct · {e.answered} answered
+                  </span>
+                  {e.participant_id && (
+                    <button
+                      className="shrink-0 px-1 text-steel-400 opacity-40 transition-opacity hover:text-red-600 group-hover:opacity-100"
+                      disabled={busy}
+                      title="Remove this player (for duplicates & abandoned entries)"
+                      aria-label={`Remove ${e.first_name} ${e.last_name}`}
+                      onClick={() =>
+                        removeParticipant(
+                          e.participant_id!,
+                          `${e.first_name} ${e.last_name}`
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          {leaderboard.length > 10 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-steel-600">
+                Showing the top 10 of {leaderboard.length} players (ties share a
+                rank) — click to see everyone
+              </summary>
+              <ol className="mt-2 grid grid-cols-1 gap-x-8 gap-y-1 md:grid-cols-2">
+                {leaderboard.slice(10).map((e, i) => (
+                  <li
+                    key={e.participant_id ?? `rest-${i}`}
+                    className="group flex items-center gap-3 rounded-lg bg-white px-3 py-1 text-sm"
+                  >
+                    <span className="w-6 shrink-0 text-right font-bold tabular-nums text-steel-500">
+                      {e.rank}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-navy-900">
+                      {e.first_name} {e.last_name}
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-steel-500">
+                      {e.correct} correct · {e.answered} answered
+                    </span>
+                    {e.participant_id && (
+                      <button
+                        className="shrink-0 px-1 text-steel-400 opacity-40 transition-opacity hover:text-red-600 group-hover:opacity-100"
+                        disabled={busy}
+                        title="Remove this player (for duplicates & abandoned entries)"
+                        aria-label={`Remove ${e.first_name} ${e.last_name}`}
+                        onClick={() =>
+                          removeParticipant(
+                            e.participant_id!,
+                            `${e.first_name} ${e.last_name}`
+                          )
+                        }
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
           )}
         </section>
       )}

@@ -1,10 +1,11 @@
 import { db } from "@/lib/db";
+import { computeLeaderboard } from "@/lib/leaderboard";
 import { jsonError, requireAdmin, rowToQuestion } from "@/lib/server";
 import type { GameStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-const STATUSES: GameStatus[] = ["draft", "open", "locked", "results"];
+const STATUSES: GameStatus[] = ["draft", "open", "locked", "results", "leaderboard"];
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -21,13 +22,14 @@ export async function GET(req: Request, { params }: Params) {
   const game = games[0];
   if (!game) return jsonError(404, "Game not found.");
 
-  const [questionRows, participantRows, answerRows] = await Promise.all([
+  const [questionRows, participantRows, answerRows, board] = await Promise.all([
     sql`select * from questions where game_id = ${id}
         order by position asc, created_at asc`,
     sql`select count(*)::int as n from participants where game_id = ${id}`,
     sql`select question_id, choice_index, count(*)::int as n
         from answers where game_id = ${id}
         group by question_id, choice_index`,
+    computeLeaderboard(sql, id),
   ]);
 
   const questions = questionRows.map((q) => rowToQuestion(q as { options: unknown }));
@@ -57,7 +59,19 @@ export async function GET(req: Request, { params }: Params) {
     })),
   };
 
-  return Response.json({ game, questions, stats, distributions });
+  // Standings preview for the host. The admin payload includes participant
+  // ids so the console can offer "remove player" — the public leaderboard
+  // endpoint never exposes them.
+  const leaderboard = board.entries.map((e) => ({
+    rank: e.rank,
+    first_name: e.first_name,
+    last_name: e.last_name,
+    correct: e.correct,
+    answered: e.answered,
+    participant_id: e.participant_id,
+  }));
+
+  return Response.json({ game, questions, stats, distributions, leaderboard });
 }
 
 export async function PATCH(req: Request, { params }: Params) {

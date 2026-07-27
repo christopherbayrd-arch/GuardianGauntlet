@@ -1,4 +1,4 @@
-export type GameStatus = "draft" | "open" | "locked" | "results";
+export type GameStatus = "draft" | "open" | "locked" | "results" | "leaderboard";
 
 export interface Game {
   id: string;
@@ -42,6 +42,24 @@ export interface QuestionResult {
   counts: number[];
 }
 
+/** One row of the final standings. Ties share a rank (1, 2, 2, 4…). */
+export interface LeaderboardEntry {
+  rank: number;
+  first_name: string;
+  last_name: string;
+  correct: number;
+  answered: number;
+  is_me?: boolean;
+  /** Present only in the admin console payload — never sent to players. */
+  participant_id?: string;
+}
+
+export interface LeaderboardPayload {
+  leaderboard: LeaderboardEntry[];
+  total_questions: number;
+  players: number;
+}
+
 export interface GameListItem extends Game {
   question_count: number;
   participant_count: number;
@@ -52,6 +70,7 @@ export const STATUS_LABELS: Record<GameStatus, string> = {
   open: "Open for answers",
   locked: "Locked",
   results: "Results",
+  leaderboard: "Leaderboard",
 };
 
 export const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"];

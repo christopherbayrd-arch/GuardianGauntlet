@@ -5,11 +5,13 @@ import { useParams } from "next/navigation";
 import { useGame } from "@/lib/useGame";
 import {
   getLocalAnswers,
-  getOrCreateParticipant,
+  getStoredParticipant,
+  joinGame,
   setLocalAnswer,
   submitAnswer,
+  type StoredParticipant,
 } from "@/lib/participant";
-import type { QuestionResult } from "@/lib/types";
+import type { LeaderboardPayload, QuestionResult } from "@/lib/types";
 import { OPTION_LETTERS } from "@/lib/types";
 import { Shield, Spinner, StatusPill } from "@/components/ui";
 
@@ -20,23 +22,48 @@ export default function PlayPage() {
   const code = (params.code ?? "").toUpperCase();
   const { game, questions, loading, error } = useGame(code);
 
-  const [participantId, setParticipantId] = useState<string | null>(null);
-  const [joinError, setJoinError] = useState<string | null>(null);
+  const [participant, setParticipant] = useState<StoredParticipant | null>(null);
+  const [pendingId, setPendingId] = useState<string | undefined>(undefined);
+  const [checkedStorage, setCheckedStorage] = useState(false);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   const [banner, setBanner] = useState<string | null>(null);
   const [idx, setIdx] = useState(0);
   const [results, setResults] = useState<QuestionResult[] | null>(null);
+  const [board, setBoard] = useState<LeaderboardPayload | null>(null);
   const jumpedRef = useRef(false);
+  const healedRef = useRef(false);
 
-  /* join + restore local answers */
+  /* restore identity + local answers for this game */
   useEffect(() => {
     if (!game?.id) return;
     setAnswers(getLocalAnswers(game.id));
-    getOrCreateParticipant(code, game.id)
-      .then(setParticipantId)
-      .catch((e) => setJoinError(e instanceof Error ? e.message : "Could not join."));
-  }, [game?.id, code]);
+    const stored = getStoredParticipant(game.id);
+    if (stored?.first_name && stored?.last_name) {
+      setParticipant({
+        id: stored.id,
+        first_name: stored.first_name,
+        last_name: stored.last_name,
+      });
+    } else if (stored?.id) {
+      // Joined before names existed — keep the id so answers survive,
+      // but ask for the name once.
+      setPendingId(stored.id);
+    }
+    setCheckedStorage(true);
+  }, [game?.id]);
+
+  /* re-register once per visit so the server row always matches this device
+     (heals things like "host reset the game while I kept the tab open") */
+  useEffect(() => {
+    if (!game?.id || !participant || healedRef.current) return;
+    healedRef.current = true;
+    joinGame(code, game.id, participant.first_name, participant.last_name, participant.id).catch(
+      () => {
+        /* offline blip — answering will surface any real problem */
+      }
+    );
+  }, [game?.id, participant, code]);
 
   /* start on the first unanswered question when the game opens */
   useEffect(() => {
@@ -48,7 +75,7 @@ export default function PlayPage() {
 
   /* results once the host reveals them */
   useEffect(() => {
-    if (game?.status !== "results") {
+    if (game?.status !== "results" && game?.status !== "leaderboard") {
       setResults(null);
       return;
     }
@@ -66,17 +93,40 @@ export default function PlayPage() {
     };
   }, [game?.status, code]);
 
+  /* final standings once the host reaches step 5 */
+  useEffect(() => {
+    if (game?.status !== "leaderboard") {
+      setBoard(null);
+      return;
+    }
+    let stop = false;
+    (async () => {
+      try {
+        const me = participant ? `?me=${encodeURIComponent(participant.id)}` : "";
+        const res = await fetch(`/api/game/${code}/leaderboard${me}`, {
+          cache: "no-store",
+        });
+        if (res.ok && !stop) setBoard(await res.json());
+      } catch {
+        /* transient */
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [game?.status, code, participant]);
+
   const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
 
   const choose = useCallback(
     async (questionId: string, choice: number) => {
-      if (!game || game.status !== "open" || !participantId) return;
+      if (!game || game.status !== "open" || !participant) return;
       setBanner(null);
       setAnswers((a) => ({ ...a, [questionId]: choice }));
       setSaveState((s) => ({ ...s, [questionId]: "saving" }));
       try {
         await submitAnswer(code, {
-          participant_id: participantId,
+          participant_id: participant.id,
           question_id: questionId,
           choice_index: choice,
         });
@@ -98,7 +148,7 @@ export default function PlayPage() {
         setBanner(e instanceof Error ? e.message : "Could not save your answer.");
       }
     },
-    [game, participantId, code, questions]
+    [game, participant, code, questions]
   );
 
   /* ── render states ────────────────────────────────────────── */
@@ -122,35 +172,43 @@ export default function PlayPage() {
 
   const q = questions[Math.min(idx, Math.max(questions.length - 1, 0))];
 
+  /* name gate — nobody gets in without a first and last name */
+  if (checkedStorage && !participant) {
+    return (
+      <PhoneShell>
+        <GameHeader title={game.title} status={game.status} />
+        <NameGate
+          onSubmit={async (first, last) => {
+            const joined = await joinGame(code, game.id, first, last, pendingId);
+            setParticipant(joined);
+            healedRef.current = true; // just joined — no need to re-register
+          }}
+        />
+        <PhoneFooter />
+      </PhoneShell>
+    );
+  }
+
   return (
     <PhoneShell>
-      {/* header */}
-      <header className="mb-4 flex items-center gap-3">
-        <Shield className="h-9 w-9 text-steel-600" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-steel-500">
-            Guardian Gauntlet
-          </div>
-          <div className="truncate text-sm font-bold text-navy-900">{game.title}</div>
-        </div>
-        <StatusPill status={game.status} />
-      </header>
+      <GameHeader
+        title={game.title}
+        status={game.status}
+        playerName={participant ? `${participant.first_name} ${participant.last_name}` : undefined}
+      />
 
       {banner && (
         <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-900">
           {banner}
         </div>
       )}
-      {joinError && (
-        <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
-          {joinError}
-        </div>
-      )}
 
       {game.status === "draft" && (
         <div className="card p-8 text-center">
           <div className="pulse-dot mx-auto mb-4 h-3 w-3 rounded-full bg-gold-500" />
-          <h1 className="text-xl font-extrabold text-navy-900">You&apos;re in!</h1>
+          <h1 className="text-xl font-extrabold text-navy-900">
+            You&apos;re in{participant ? `, ${participant.first_name}` : ""}!
+          </h1>
           <p className="mt-2 text-sm text-steel-600">
             Questions open soon. Keep this page handy — it updates by itself.
           </p>
@@ -283,9 +341,16 @@ export default function PlayPage() {
         <ResultsView questions={questions} results={results} answers={answers} />
       )}
 
-      <footer className="mt-8 pb-6 text-center text-[11px] font-medium text-steel-400">
-        Guardian Pharmacy · Guardian Gauntlet
-      </footer>
+      {game.status === "leaderboard" && (
+        <LeaderboardView
+          board={board}
+          fallbackName={
+            participant ? `${participant.first_name} ${participant.last_name}` : null
+          }
+        />
+      )}
+
+      <PhoneFooter />
     </PhoneShell>
   );
 }
@@ -295,6 +360,126 @@ export default function PlayPage() {
 function PhoneShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="mx-auto min-h-screen w-full max-w-md px-4 py-5">{children}</main>
+  );
+}
+
+function GameHeader({
+  title,
+  status,
+  playerName,
+}: {
+  title: string;
+  status: React.ComponentProps<typeof StatusPill>["status"];
+  playerName?: string;
+}) {
+  return (
+    <header className="mb-4 flex items-center gap-3">
+      <Shield className="h-9 w-9 text-steel-600" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-steel-500">
+          Guardian Gauntlet
+        </div>
+        <div className="truncate text-sm font-bold text-navy-900">{title}</div>
+        {playerName && (
+          <div className="truncate text-[11px] font-medium text-steel-500">
+            Playing as {playerName}
+          </div>
+        )}
+      </div>
+      <StatusPill status={status} />
+    </header>
+  );
+}
+
+function PhoneFooter() {
+  return (
+    <footer className="mt-8 pb-6 text-center text-[11px] font-medium text-steel-400">
+      Guardian Pharmacy · Guardian Gauntlet
+    </footer>
+  );
+}
+
+function NameGate({
+  onSubmit,
+}: {
+  onSubmit: (first: string, last: string) => Promise<void>;
+}) {
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const valid = first.trim().length > 0 && last.trim().length > 0;
+
+  return (
+    <div className="card p-6">
+      <h1 className="text-xl font-extrabold text-navy-900">Who&apos;s playing?</h1>
+      <p className="mt-1 text-sm text-steel-600">
+        Enter your name to join — the top scorers land on the big-screen
+        leaderboard at the end.
+      </p>
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!valid || busy) return;
+          setBusy(true);
+          setError(null);
+          try {
+            await onSubmit(first.trim(), last.trim());
+          } catch (err) {
+            setError(
+              err instanceof Error ? err.message : "Could not join. Try again."
+            );
+            setBusy(false);
+          }
+        }}
+      >
+        <div>
+          <label
+            className="mb-1 block text-xs font-bold uppercase tracking-wide text-steel-600"
+            htmlFor="first-name"
+          >
+            First name
+          </label>
+          <input
+            id="first-name"
+            className="input"
+            autoComplete="given-name"
+            autoFocus
+            maxLength={40}
+            placeholder="Alex"
+            value={first}
+            onChange={(e) => setFirst(e.target.value)}
+          />
+        </div>
+        <div>
+          <label
+            className="mb-1 block text-xs font-bold uppercase tracking-wide text-steel-600"
+            htmlFor="last-name"
+          >
+            Last name
+          </label>
+          <input
+            id="last-name"
+            className="input"
+            autoComplete="family-name"
+            maxLength={40}
+            placeholder="Rivera"
+            value={last}
+            onChange={(e) => setLast(e.target.value)}
+          />
+        </div>
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        <button className="btn btn-primary w-full !py-3 text-base" disabled={!valid || busy}>
+          {busy ? "Joining…" : "Let's play →"}
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -338,7 +523,7 @@ function ResultsView({
           <span className="text-2xl font-bold text-steel-400"> / {results.length}</span>
         </div>
         <p className="mt-2 text-xs text-steel-400">
-          Scored on your own device — answers were anonymous.
+          Leaderboard coming up on the big screen…
         </p>
       </div>
 
@@ -408,6 +593,90 @@ function ResultsView({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+function LeaderboardView({
+  board,
+  fallbackName,
+}: {
+  board: LeaderboardPayload | null;
+  fallbackName: string | null;
+}) {
+  if (!board)
+    return (
+      <div className="card p-8 text-center text-sm text-steel-600">
+        Loading the leaderboard…
+      </div>
+    );
+
+  const me = board.leaderboard.find((e) => e.is_me) ?? null;
+  const top = board.leaderboard.slice(0, 10);
+
+  return (
+    <div className="space-y-3">
+      <div className="card bg-navy-900 p-6 text-center">
+        <div className="text-xs font-bold uppercase tracking-[0.2em] text-gold-500">
+          Final standings
+        </div>
+        {me ? (
+          <>
+            <div className="mt-1 text-5xl font-extrabold text-white">
+              {me.rank <= 3 ? MEDALS[me.rank - 1] : `#${me.rank}`}
+            </div>
+            <p className="mt-1 text-sm font-semibold text-steel-300">
+              {me.first_name} {me.last_name} — {me.correct} of {board.total_questions}{" "}
+              correct
+            </p>
+            <p className="mt-1 text-xs text-steel-400">
+              Out of {board.players} player{board.players === 1 ? "" : "s"}
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm text-steel-300">
+            {fallbackName ? `${fallbackName}, thanks` : "Thanks"} for playing!
+          </p>
+        )}
+      </div>
+
+      <div className="card p-4">
+        <div className="mb-2 text-xs font-bold uppercase tracking-wide text-steel-500">
+          Top {Math.min(10, top.length)}
+        </div>
+        <ul className="space-y-1.5">
+          {top.map((e, i) => (
+            <li
+              key={`${e.rank}-${e.first_name}-${e.last_name}-${i}`}
+              className={
+                "flex items-center gap-3 rounded-lg border px-3 py-2 text-sm " +
+                (e.is_me
+                  ? "border-gold-500 bg-gold-100"
+                  : e.rank === 1
+                    ? "border-gold-300 bg-gold-100/50"
+                    : "border-steel-100")
+              }
+            >
+              <span className="w-8 shrink-0 text-center font-extrabold text-navy-900">
+                {e.rank <= 3 ? MEDALS[e.rank - 1] : e.rank}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-semibold text-navy-900">
+                {e.first_name} {e.last_name}
+                {e.is_me && (
+                  <span className="ml-2 rounded-full bg-navy-800 px-2 py-0.5 text-[10px] font-bold text-white">
+                    You
+                  </span>
+                )}
+              </span>
+              <span className="shrink-0 text-xs font-bold tabular-nums text-steel-600">
+                {e.correct}/{board.total_questions}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

@@ -9,21 +9,25 @@ one click and walk through the results question by question — revealing the
 correct answer only when you say so.
 
 **Stack:** Next.js (hosted free on Vercel, code on GitHub) + Neon serverless
-Postgres (free). No other services, no accounts for attendees, fully anonymous.
+Postgres (free). No other services, no accounts for attendees — players just
+type their first and last name when they scan in.
 
 ---
 
-## The four game modes
+## The five game modes
 
 | Mode | What the room sees | What phones can do |
 |---|---|---|
-| **1 · Setup** | "Get ready" splash + QR code | Join early, wait |
+| **1 · Setup** | "Get ready" splash + QR code | Enter first & last name, join early, wait |
 | **2 · Open** | Questions cycling + QR + live answer count | Answer & change answers freely |
 | **3 · Lock** | "Answers are locked" | Nothing — the database rejects new answers |
-| **4 · Results** | One question at a time with vote bars; correct answer highlights when you hit **Reveal** | See their own score on their phone |
+| **4 · Results** | One question at a time with vote bars; correct answer highlights when you hit **Reveal** | See their own score & the room's votes |
+| **5 · Leaderboard** | Podium for the top 3 + ranks 4–10 | See their own rank + the top 10 |
 
 Correct answers are never sent to phones or the big screen until Results mode —
-not even to someone poking around in browser dev tools.
+not even to someone poking around in browser dev tools. Scores and standings
+stay hidden until then too; the console shows you a private leaderboard preview
+from the moment you lock, so you can prep the prize handoff.
 
 ---
 
@@ -83,8 +87,9 @@ If it's not a git repo yet, run `git init -b main && git add -A && git commit -m
 1. Open `https://YOUR-APP.vercel.app/console`, enter your passcode.
 2. Open the **Demo** game → click **Open big screen ↗** → press **F** for
    full screen.
-3. Scan the QR with your phone, answer the questions, then in the console:
-   **Lock** → **Results** → **Next/Reveal** your way through.
+3. Scan the QR with your phone, type a name, answer the questions, then in the
+   console: **Lock** → **Results** → **Next/Reveal** your way through →
+   **Leaderboard** for the finale.
 4. When you're done playing: **Reset answers & players** (keeps the questions).
 
 ---
@@ -113,8 +118,14 @@ If it's not a git repo yet, run `git init -b main && git add -A && git commit -m
 5. Hit **Lock** when time's up. Then **Results** when you're ready to talk.
 6. For each question: let the room react to the bars, *then* hit
    **★ Reveal correct answer**. **Next →** to move on.
-7. Phones show each person their own score at the end — scored on their own
-   device, so nobody's answers were ever tied to their name.
+7. Finish with **5 · Leaderboard** — the big screen shows the podium and top 10
+   while each phone shows that person their own rank and score. The console's
+   leaderboard preview (visible to you from Lock onward) tells you the winners
+   ahead of time. Ties share a rank.
+8. Spot a duplicate in the preview (someone who switched phones mid-game and
+   rejoined, leaving a half-finished ghost entry)? Hit the **✕** next to the
+   stale row to remove it — that player's answers go with it — before you flip
+   the room to Leaderboard.
 
 **Handy keys on the big screen:** `←`/`→` skip · `Space` pause cycling ·
 `F` full screen. If you've unlocked the console in the *same browser*, `←`/`→`
@@ -149,8 +160,18 @@ npm run dev                  # http://localhost:3000
 - Comfortably handles a ~100-person room on the free Vercel + Neon tiers.
 - Change the passcode anytime: Vercel → Settings → Environment Variables →
   `ADMIN_PASSCODE` → redeploy.
-- Everything is anonymous by design: no names, no sign-ins, one answer per
-  device per question (people can change answers until you lock).
+- Players join with their first and last name (that's what the leaderboard
+  shows); no accounts or sign-ins. One answer per device per question — people
+  can change answers until you lock.
+- A name typed once is remembered on that device for that game, so a page
+  refresh never asks again or double-counts anyone. Someone who clears their
+  browser data or switches devices mid-game starts fresh as a new player —
+  their old half-entry stays until you remove it with ✕ in the console's
+  leaderboard preview. (Typing someone's name never takes over their entry —
+  that would let people hijack the leader.)
+- **Upgrading an existing database:** `db/schema.sql` is safe to re-run — after
+  pulling new code, paste it into Neon's SQL Editor again and Run. It adds the
+  name columns and the Leaderboard mode without touching stored answers.
 
 ## Project map
 

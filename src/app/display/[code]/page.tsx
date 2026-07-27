@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useGame, useWakeLock } from "@/lib/useGame";
 import { adminFetch, getPasscode } from "@/lib/adminApi";
-import type { GameStats, QuestionResult } from "@/lib/types";
+import type { GameStats, LeaderboardPayload, QuestionResult } from "@/lib/types";
 import { OPTION_LETTERS } from "@/lib/types";
 import { QrPanel } from "@/components/QrPanel";
 import { Wordmark } from "@/components/ui";
@@ -46,7 +46,7 @@ export default function DisplayPage() {
   /* ── live stats while people are answering ────────────────── */
   const [stats, setStats] = useState<GameStats | null>(null);
   useEffect(() => {
-    if (!game || game.status === "results") return;
+    if (!game || game.status === "results" || game.status === "leaderboard") return;
     let stop = false;
     const pull = async () => {
       try {
@@ -76,6 +76,27 @@ export default function DisplayPage() {
       try {
         const res = await fetch(`/api/game/${code}/results`, { cache: "no-store" });
         if (res.ok && !stop) setResults((await res.json()).results);
+      } catch {
+        /* transient */
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [game?.status, code]);
+
+  /* ── final standings once the game enters Leaderboard mode ── */
+  const [board, setBoard] = useState<LeaderboardPayload | null>(null);
+  useEffect(() => {
+    if (game?.status !== "leaderboard") {
+      setBoard(null);
+      return;
+    }
+    let stop = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/game/${code}/leaderboard`, { cache: "no-store" });
+        if (res.ok && !stop) setBoard(await res.json());
       } catch {
         /* transient */
       }
@@ -276,6 +297,8 @@ export default function DisplayPage() {
             reveal={game.reveal}
           />
         )}
+
+        {game.status === "leaderboard" && <LeaderboardSlide board={board} />}
       </div>
 
       {/* Control strip (fades away with the cursor) */}
@@ -292,7 +315,10 @@ export default function DisplayPage() {
             (canDrive
               ? "← → question · R reveal · F full screen"
               : "Advance from the question console · F full screen")}
-          {(game.status === "draft" || game.status === "locked") && "F full screen"}
+          {(game.status === "draft" ||
+            game.status === "locked" ||
+            game.status === "leaderboard") &&
+            "F full screen"}
         </span>
         <button
           onClick={toggleFullscreen}
@@ -518,6 +544,105 @@ function ResultsSlide({
           <p className="mt-8 text-xl text-steel-400">
             Which one was it? <span className="text-gold-400">Correct answer coming up…</span>
           </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const PODIUM_ORDER = [1, 0, 2]; // display 2nd · 1st · 3rd
+
+function LeaderboardSlide({ board }: { board: LeaderboardPayload | null }) {
+  if (!board) return <CenterNote>Crunching the final scores…</CenterNote>;
+  if (board.leaderboard.length === 0)
+    return <CenterNote>No named players to rank yet.</CenterNote>;
+
+  const top = board.leaderboard.slice(0, 10);
+  const podium = top.slice(0, 3);
+  const rest = top.slice(3);
+
+  return (
+    <section className="flex min-w-0 flex-1 flex-col items-center justify-center">
+      <div className="slide-in flex w-full max-w-[70rem] flex-col items-center">
+        <div className="mb-8 flex items-center gap-4">
+          <span className="rounded-full bg-gold-500 px-6 py-2 text-xl font-extrabold text-navy-950">
+            🏆 Final standings
+          </span>
+          <span className="text-xl text-steel-400 tabular-nums">
+            {board.players} player{board.players === 1 ? "" : "s"} ·{" "}
+            {board.total_questions} questions
+          </span>
+        </div>
+
+        {/* Podium — 2nd, 1st, 3rd */}
+        <div className="flex w-full items-end justify-center gap-6">
+          {PODIUM_ORDER.map((pi, col) => {
+            const e = podium[pi];
+            if (!e) return <div key={col} className="w-64" />;
+            const first = e.rank === 1;
+            const name = `${e.first_name} ${e.last_name}`;
+            return (
+              <div
+                key={col}
+                className={
+                  "slide-in flex w-80 flex-col items-center rounded-2xl border px-5 text-center " +
+                  (first
+                    ? "border-gold-500 bg-gold-500/15 py-8"
+                    : "border-white/15 bg-white/5 py-6")
+                }
+                style={{ animationDelay: `${150 + col * 120}ms` }}
+              >
+                <div className={first ? "text-6xl" : "text-5xl"}>
+                  {["🥇", "🥈", "🥉"][e.rank - 1] ?? `#${e.rank}`}
+                </div>
+                <div
+                  className={
+                    "mt-3 w-full break-words font-extrabold leading-tight " +
+                    (first
+                      ? name.length > 18
+                        ? "text-2xl text-white"
+                        : "text-3xl text-white"
+                      : name.length > 18
+                        ? "text-xl text-steel-100"
+                        : "text-2xl text-steel-100")
+                  }
+                >
+                  {name}
+                </div>
+                <div
+                  className={
+                    "mt-1 text-xl font-bold tabular-nums " +
+                    (first ? "text-gold-400" : "text-steel-300")
+                  }
+                >
+                  {e.correct} / {board.total_questions}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Ranks 4–10 */}
+        {rest.length > 0 && (
+          <ul className="mt-8 grid w-full max-w-[56rem] grid-cols-1 gap-x-10 gap-y-2 xl:grid-cols-2">
+            {rest.map((e, i) => (
+              <li
+                key={`${e.rank}-${e.first_name}-${e.last_name}-${i}`}
+                className="slide-in flex items-center gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-2.5"
+                style={{ animationDelay: `${550 + i * 90}ms` }}
+              >
+                <span className="w-9 shrink-0 text-right text-xl font-extrabold tabular-nums text-steel-400">
+                  {e.rank <= 3 ? ["🥇", "🥈", "🥉"][e.rank - 1] : e.rank}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xl font-semibold text-steel-100">
+                  {e.first_name} {e.last_name}
+                </span>
+                <span className="shrink-0 text-lg font-bold tabular-nums text-steel-300">
+                  {e.correct} / {board.total_questions}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </section>

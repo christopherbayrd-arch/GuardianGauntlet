@@ -58,6 +58,7 @@ const STATUS_STYLES: Record<GameStatus, string> = {
   open: "bg-emerald-100 text-emerald-800 border border-emerald-300",
   locked: "bg-amber-100 text-amber-800 border border-amber-300",
   results: "bg-navy-800 text-white border border-navy-800",
+  leaderboard: "bg-gold-100 text-navy-900 border border-gold-500",
 };
 
 export function StatusPill({ status }: { status: GameStatus }) {
@@ -66,6 +67,7 @@ export function StatusPill({ status }: { status: GameStatus }) {
       {status === "open" && (
         <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-emerald-600" />
       )}
+      {status === "leaderboard" && <span aria-hidden>🏆</span>}
       {STATUS_LABELS[status]}
     </span>
   );

@@ -8,12 +8,17 @@ create table if not exists games (
   id            uuid primary key default gen_random_uuid(),
   code          text not null unique,
   title         text not null default 'Untitled game',
-  status        text not null default 'draft'
-                check (status in ('draft', 'open', 'locked', 'results')),
+  status        text not null default 'draft',
   current_index int  not null default 0,   -- which question the results walkthrough is on
   reveal        boolean not null default false, -- whether the correct answer is highlighted
   created_at    timestamptz not null default now()
 );
+
+-- Allowed game modes. Dropped & re-created on every run so that re-running
+-- this file upgrades an existing database (e.g. adds 'leaderboard').
+alter table games drop constraint if exists games_status_check;
+alter table games add constraint games_status_check
+  check (status in ('draft', 'open', 'locked', 'results', 'leaderboard'));
 
 create table if not exists questions (
   id            uuid primary key default gen_random_uuid(),
@@ -29,9 +34,15 @@ create index if not exists questions_game_idx on questions (game_id, position);
 create table if not exists participants (
   id         uuid primary key,
   game_id    uuid not null references games (id) on delete cascade,
+  first_name text,
+  last_name  text,
   created_at timestamptz not null default now()
 );
 create index if not exists participants_game_idx on participants (game_id);
+
+-- Upgrade path for databases created before the leaderboard feature:
+alter table participants add column if not exists first_name text;
+alter table participants add column if not exists last_name  text;
 
 create table if not exists answers (
   id             uuid primary key default gen_random_uuid(),
