@@ -106,6 +106,8 @@ If it's not a git repo yet, run `git init -b main && git add -A && git commit -m
    ```
 
    Separate with `|` and put `*` in front of the correct option (2–6 options).
+   Once they're all in, **🔀 Randomize** (shown in Setup mode) shuffles them
+   into a random order — click it again for a fresh shuffle.
 3. Do a practice run with a colleague, then **Reset answers & players**.
 
 **Day of**

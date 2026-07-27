@@ -163,6 +163,35 @@ export default function GameConsolePage() {
     }
   };
 
+  const randomize = async () => {
+    if (questions.length < 2) return;
+    // Fisher–Yates, re-rolled (bounded) so the order visibly changes.
+    let shuffled = [...questions];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      shuffled = [...questions];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      if (shuffled.some((q, i) => q.id !== questions[i].id)) break;
+    }
+    setQuestions(shuffled);
+    setBusy(true);
+    try {
+      await adminFetch(`/api/admin/games/${gameId}/questions`, {
+        method: "PUT",
+        body: { ordered_ids: shuffled.map((q) => q.id) },
+      });
+      setError(null);
+    } catch (e) {
+      if (!authFail(e))
+        setError(e instanceof Error ? e.message : "Randomize failed.");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const removeParticipant = async (pid: string, name: string) => {
     if (
       !confirm(
@@ -563,6 +592,16 @@ export default function GameConsolePage() {
             Questions ({questions.length})
           </h2>
           <div className="flex gap-2">
+            {game.status === "draft" && questions.length >= 2 && (
+              <button
+                className="btn btn-ghost"
+                disabled={busy}
+                title="Shuffle the questions into a random order"
+                onClick={randomize}
+              >
+                🔀 Randomize
+              </button>
+            )}
             <button
               className="btn btn-ghost"
               onClick={() => setEditing(editing === "bulk" ? null : "bulk")}
