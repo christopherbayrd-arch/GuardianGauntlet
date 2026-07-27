@@ -38,7 +38,8 @@ export async function adminFetch<T = unknown>(
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(
-      (data as { error?: string }).error ?? `Request failed (${res.status})`
+      (data as { error?: string }).error ??
+        `Request failed (${res.status}). Open ${window.location.origin}/api/health to see what needs fixing.`
     );
   }
   return data as T;

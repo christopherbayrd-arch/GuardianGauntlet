@@ -29,8 +29,14 @@ export default function ConsolePage() {
       setAuthed(true);
       setError(null);
     } catch (e) {
-      if (e instanceof AdminAuthError) setAuthed(false);
-      else setError(e instanceof Error ? e.message : "Could not load games.");
+      if (e instanceof AdminAuthError) {
+        setAuthed(false);
+      } else {
+        // Passcode was fine but the server had a problem (usually database
+        // setup) — show the console with the error instead of a stuck gate.
+        setAuthed(true);
+        setError(e instanceof Error ? e.message : "Could not load games.");
+      }
     } finally {
       setLoading(false);
     }
