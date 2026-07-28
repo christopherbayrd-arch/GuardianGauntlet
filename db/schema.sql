@@ -11,8 +11,12 @@ create table if not exists games (
   status        text not null default 'draft',
   current_index int  not null default 0,   -- which question the results walkthrough is on
   reveal        boolean not null default false, -- whether the correct answer is highlighted
-  created_at    timestamptz not null default now()
+  created_at    timestamptz not null default now(),
+  deleted_at    timestamptz               -- set = in "Deleted games" (auto-purged after 30 days)
 );
+
+-- Upgrade path for databases created before the Deleted-games feature:
+alter table games add column if not exists deleted_at timestamptz;
 
 -- Allowed game modes. Dropped & re-created on every run so that re-running
 -- this file upgrades an existing database (e.g. adds 'leaderboard').

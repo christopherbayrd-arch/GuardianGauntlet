@@ -35,7 +35,8 @@ export async function POST(req: Request, { params }: Params) {
   const sql = db();
 
   const games = await sql`
-    select id, status from games where code = ${code.toUpperCase()}`;
+    select id, status from games
+    where code = ${code.toUpperCase()} and deleted_at is null`;
   const game = games[0] as { id: string; status: string } | undefined;
   if (!game) return jsonError(404, "Game not found.");
   if (game.status !== "open") {
@@ -62,7 +63,7 @@ export async function POST(req: Request, { params }: Params) {
   const inserted = await sql`
     insert into answers (game_id, question_id, participant_id, choice_index)
     select ${game.id}, ${question_id}, ${participant_id}, ${choice_index}
-    where exists (select 1 from games where id = ${game.id} and status = 'open')
+    where exists (select 1 from games where id = ${game.id} and status = 'open' and deleted_at is null)
     on conflict (question_id, participant_id)
     do update set choice_index = excluded.choice_index
     returning id`;

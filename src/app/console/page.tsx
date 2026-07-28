@@ -10,6 +10,7 @@ import {
   setPasscode,
 } from "@/lib/adminApi";
 import type { GameListItem } from "@/lib/types";
+import { daysLeftInTrash } from "@/lib/types";
 import { Shield, Spinner, StatusPill } from "@/components/ui";
 
 export default function ConsolePage() {
@@ -19,6 +20,7 @@ export default function ConsolePage() {
   const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   const router = useRouter();
 
   const loadGames = useCallback(async () => {
@@ -63,6 +65,29 @@ export default function ConsolePage() {
     }
   };
 
+  const restore = async (g: GameListItem) => {
+    setRestoringId(g.id);
+    setError(null);
+    try {
+      await adminFetch(`/api/admin/games/${g.id}/restore`, { method: "POST" });
+      await loadGames();
+    } catch (e) {
+      if (e instanceof AdminAuthError) setAuthed(false);
+      else setError(e instanceof Error ? e.message : "Could not restore the game.");
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  const activeGames = games.filter((g) => !g.deleted_at);
+  const deletedGames = games
+    .filter((g) => g.deleted_at)
+    .sort(
+      (a, b) =>
+        new Date(b.deleted_at as string).getTime() -
+        new Date(a.deleted_at as string).getTime()
+    );
+
   if (authed === false) return <PasscodeGate onSuccess={loadGames} />;
 
   return (
@@ -99,13 +124,13 @@ export default function ConsolePage() {
 
       {loading && games.length === 0 ? (
         <Spinner label="Loading games…" />
-      ) : games.length === 0 ? (
+      ) : activeGames.length === 0 ? (
         <div className="card p-8 text-center text-steel-600">
           No games yet — create your first one above.
         </div>
       ) : (
         <ul className="space-y-3">
-          {games.map((g) => (
+          {activeGames.map((g) => (
             <li key={g.id} className="card p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -146,6 +171,64 @@ export default function ConsolePage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {deletedGames.length > 0 && (
+        <section className="mt-12">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
+            Deleted games
+          </h2>
+          <p className="mb-3 mt-1 text-xs text-steel-600">
+            Kept for 30 days, then removed automatically — restore a game to
+            bring it back exactly as it was, questions and answers included.
+          </p>
+          <ul className="space-y-3">
+            {deletedGames.map((g) => {
+              const days = daysLeftInTrash(g.deleted_at as string);
+              return (
+                <li
+                  key={g.id}
+                  className="card border-dashed bg-steel-50 p-4 opacity-90"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-lg font-bold text-steel-700">
+                        {g.title}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-steel-600">
+                        <span className="chip bg-steel-100 font-mono text-navy-800">
+                          {g.code}
+                        </span>
+                        <span>
+                          {g.question_count} question{g.question_count === 1 ? "" : "s"}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          {g.participant_count} player{g.participant_count === 1 ? "" : "s"}
+                        </span>
+                        <span>·</span>
+                        <span className="font-semibold text-red-700">
+                          {days <= 0
+                            ? "removed any time now"
+                            : days === 1
+                              ? "auto-removes in 1 day"
+                              : `auto-removes in ${days} days`}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-steel shrink-0"
+                      disabled={restoringId !== null}
+                      onClick={() => restore(g)}
+                    >
+                      {restoringId === g.id ? "Restoring…" : "Restore"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
     </main>
   );

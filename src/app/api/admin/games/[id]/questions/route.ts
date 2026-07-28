@@ -13,8 +13,10 @@ export async function POST(req: Request, { params }: Params) {
   if (typeof parsed === "string") return jsonError(400, parsed);
 
   const sql = db();
-  const games = await sql`select id from games where id = ${id}`;
+  const games = await sql`select id, deleted_at from games where id = ${id}`;
   if (!games[0]) return jsonError(404, "Game not found.");
+  if ((games[0] as { deleted_at: string | null }).deleted_at)
+    return jsonError(409, "This game is in Deleted games — restore it before editing questions.");
 
   const rows = await sql`
     insert into questions (game_id, position, prompt, options, correct_index)
@@ -44,6 +46,11 @@ export async function PUT(req: Request, { params }: Params) {
   }
 
   const sql = db();
+  const games = await sql`select id, deleted_at from games where id = ${id}`;
+  if (!games[0]) return jsonError(404, "Game not found.");
+  if ((games[0] as { deleted_at: string | null }).deleted_at)
+    return jsonError(409, "This game is in Deleted games — restore it before editing questions.");
+
   for (let i = 0; i < body.ordered_ids.length; i++) {
     await sql`
       update questions set position = ${i}

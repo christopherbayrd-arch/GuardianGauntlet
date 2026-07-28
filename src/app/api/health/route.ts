@@ -33,6 +33,16 @@ export async function GET() {
     try {
       const rows = await db()`select count(*)::int as n from games`;
       checks.database = `✓ connected — ${rows[0].n} game(s) in the database`;
+
+      // 3b — schema up to date? (deleted_at powers the Deleted-games trash)
+      try {
+        await db()`select deleted_at from games limit 0`;
+        checks.schema = "✓ up to date";
+      } catch {
+        ok = false;
+        checks.schema =
+          "✗ OUT OF DATE — the games.deleted_at column is missing (needed for Deleted games / restore). Open Neon → SQL Editor → paste ALL of db/schema.sql → Run. Then refresh this page.";
+      }
     } catch (e) {
       ok = false;
       const msg = e instanceof Error ? e.message : String(e);

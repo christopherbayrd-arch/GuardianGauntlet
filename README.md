@@ -145,6 +145,23 @@ to change it (4–120).
   scratch. Old games keep their results until you delete them.
 - Several games can exist side by side — each has its own code, QR, and links.
 
+## Deleting a game (and getting it back)
+
+Deleting is deliberately hard to do by accident, and easy to undo:
+
+1. Console → open the game → **Housekeeping** → **Delete game…**
+2. Type the confirmation phrase — **`Delete`** followed by the game's exact
+   title (e.g. `Delete National Purchasing Meeting 2026`). The button stays
+   disabled until it matches (capitalization doesn't matter). The server
+   double-checks the phrase too.
+3. The game moves to **Deleted games** at the bottom of the console home page.
+   Its QR code, display, and phones stop working immediately.
+4. Changed your mind? Hit **Restore** there — the game comes back exactly as it
+   was, questions, players, and answers included.
+5. After **30 days** in Deleted games it's removed automatically, for good.
+   There's intentionally no "delete forever" button — a deleted game can only
+   be restored or age out.
+
 ## Local development (optional)
 
 ```bash
@@ -173,7 +190,9 @@ npm run dev                  # http://localhost:3000
   that would let people hijack the leader.)
 - **Upgrading an existing database:** `db/schema.sql` is safe to re-run — after
   pulling new code, paste it into Neon's SQL Editor again and Run. It adds the
-  name columns and the Leaderboard mode without touching stored answers.
+  name columns, the Leaderboard mode, and the `deleted_at` column behind
+  Deleted games without touching stored answers. (`/api/health` will tell you
+  if the app is running against a database that's missing an upgrade.)
 
 ## Project map
 

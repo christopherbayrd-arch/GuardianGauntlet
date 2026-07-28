@@ -13,7 +13,11 @@ import type {
   GameStatus,
   LeaderboardEntry,
 } from "@/lib/types";
-import { OPTION_LETTERS } from "@/lib/types";
+import {
+  OPTION_LETTERS,
+  confirmationMatches,
+  deleteConfirmationPhrase,
+} from "@/lib/types";
 import { CopyButton, Spinner, StatusPill } from "@/components/ui";
 
 interface Detail {
@@ -44,6 +48,7 @@ export default function GameConsolePage() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [editing, setEditing] = useState<string | null>(null); // question id | "new" | "bulk" | null
   const [origin, setOrigin] = useState("");
   const editingRef = useRef(editing);
@@ -213,20 +218,14 @@ export default function GameConsolePage() {
     }
   };
 
-  const action = async (kind: "reset" | "duplicate" | "delete") => {
+  const action = async (kind: "reset" | "duplicate") => {
     const confirms: Record<string, string> = {
       reset:
         "Clear ALL answers and players for this game? Questions are kept. Use this after a test run.",
-      delete: "Permanently delete this game, its questions, and all answers?",
     };
     if (confirms[kind] && !confirm(confirms[kind])) return;
     setBusy(true);
     try {
-      if (kind === "delete") {
-        await adminFetch(`/api/admin/games/${gameId}`, { method: "DELETE" });
-        router.push("/console");
-        return;
-      }
       const d = await adminFetch<{ game?: { id: string } }>(
         `/api/admin/games/${gameId}/actions`,
         { method: "POST", body: { action: kind } }
@@ -238,6 +237,28 @@ export default function GameConsolePage() {
       await load();
     } catch (e) {
       if (!authFail(e)) setError(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Move the game to "Deleted games". The typed confirmation phrase is sent
+   * along and re-checked by the server. Returns an error message to show
+   * inside the dialog, or null on success (which navigates away).
+   */
+  const deleteGame = async (confirmation: string): Promise<string | null> => {
+    setBusy(true);
+    try {
+      await adminFetch(`/api/admin/games/${gameId}`, {
+        method: "DELETE",
+        body: { confirmation },
+      });
+      router.push("/console");
+      return null;
+    } catch (e) {
+      if (authFail(e)) return null;
+      return e instanceof Error ? e.message : "Delete failed.";
     } finally {
       setBusy(false);
     }
@@ -740,20 +761,129 @@ export default function GameConsolePage() {
           <button className="btn btn-danger" disabled={busy} onClick={() => action("reset")}>
             Reset answers & players
           </button>
-          <button className="btn btn-danger" disabled={busy} onClick={() => action("delete")}>
-            Delete game
+          <button
+            className="btn btn-danger"
+            disabled={busy}
+            onClick={() => setConfirmingDelete(true)}
+          >
+            Delete game…
           </button>
         </div>
         <p className="mt-3 text-xs text-steel-600">
           Run a practice round today, then <b>Reset answers & players</b> so the room
-          starts clean on game day.
+          starts clean on game day. Deleted games sit in <b>Deleted games</b> on the
+          console home page for 30 days — restorable until then, removed for good after.
         </p>
       </section>
+
+      {confirmingDelete && (
+        <DeleteGameDialog
+          title={game.title}
+          busy={busy}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={deleteGame}
+        />
+      )}
     </main>
   );
 }
 
 /* ────────────────────────── helpers ────────────────────────── */
+
+/**
+ * Type-to-confirm delete dialog. The delete button stays disabled until the
+ * host types "Delete <game title>" — a slip of the mouse can't wipe a game.
+ * Even then nothing is destroyed yet: the game moves to Deleted games for
+ * 30 days, restorable from the console home page.
+ */
+function DeleteGameDialog({
+  title,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (confirmation: string) => Promise<string | null>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const phrase = deleteConfirmationPhrase(title);
+  const matches = confirmationMatches(typed, title);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!matches || busy) return;
+    const msg = await onConfirm(typed);
+    if (msg) setError(msg);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/70 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <form
+        onSubmit={submit}
+        className="card slide-in w-full max-w-md space-y-4 p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete game"
+      >
+        <div>
+          <h2 className="text-lg font-extrabold text-navy-900">
+            Delete “{title}”?
+          </h2>
+          <p className="mt-2 text-sm text-steel-700">
+            The game moves to <b>Deleted games</b> on the console home page —
+            questions, players, and answers go with it. You can restore it from
+            there for <b>30 days</b>; after that it&apos;s removed automatically.
+          </p>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-navy-800">
+            To confirm, type{" "}
+            <span className="rounded bg-steel-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-navy-900">
+              {phrase}
+            </span>
+          </label>
+          <input
+            className="input"
+            value={typed}
+            onChange={(e) => {
+              setTyped(e.target.value);
+              setError(null);
+            }}
+            placeholder={phrase}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
+        {error && <p className="text-sm font-medium text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn btn-danger" disabled={!matches || busy}>
+            {busy ? "Deleting…" : "Delete this game"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function TitleEditor({
   title,

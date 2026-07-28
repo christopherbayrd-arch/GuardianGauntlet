@@ -1,0 +1,11 @@
+Approximately how many employees does Guardian have? | 1500 | *3500 | 5000 | 10000
+How many lives does Guardian currently service? | More than 10k | More than 100k | *More than 200k | More than 500k
+What is our current generic compliance target with Cardinal and McKesson respectively? | *9% and 6.35% | 11% and 6.35% | 10% and 9% | 7.5% and 5.35%
+What metric does Guardian use when calculating Margin? | Acquisition Cost | Cost of Goods Sold | Current Inventory | *Cost of Sales
+Where would you find contact information for Vendors, Reverse Distributors, and Power BI team? | Guardian Website | Power BI | *Swim Lane Document | Workday
+What is the preferred method for identifying drugs that need transferred to and from another Guardian location? | Phone call | Email | *Transfer List | Surecost
+Which statement is true? | *Source OTC expenditure has a significant impact on overall generic compliance | Source OTC expenditure doesn't matter because OTCs aren't true generics | Source OTC expenditure is only important for large pharmacies | Source OTC expenditure is a crock and nobody looks at it anyway
+Which statement is true? | The Guardian Warehouse only stocks generic drugs | The Guardian Warehouse is my favorite place to shop | The Guardian Warehouse is used only when wholesalers are out of stock | *The Guardian Warehouse saves Guardian millions of dollars per year
+Who is the Guardian Warehouse guru? | Blaine Cox | *Matt Smith | Shae Doty | Chris Bayrd
+Guardian Warehouse is located in what state? | Georgia | Alabama | Michigan | *Tennessee
+If Guardian were Star Wars, William Posten would be what character? | Lord Palpatine/The Emperor | Darth Maul | C3PO | *Obi-Wan Kenobi

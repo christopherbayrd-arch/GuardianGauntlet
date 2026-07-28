@@ -14,6 +14,18 @@ export async function POST(req: Request, { params }: Params) {
   const body = await req.json().catch(() => ({}));
   const sql = db();
 
+  // A game sitting in "Deleted games" can't be reset or duplicated —
+  // restore it from the console home page first.
+  const found = await sql`select deleted_at from games where id = ${id}`;
+  const target = found[0] as { deleted_at: string | null } | undefined;
+  if (!target) return jsonError(404, "Game not found.");
+  if (target.deleted_at) {
+    return jsonError(
+      409,
+      "This game is in Deleted games. Restore it from the console home page first."
+    );
+  }
+
   if (body.action === "reset") {
     await sql`delete from answers where game_id = ${id}`;
     await sql`delete from participants where game_id = ${id}`;
