@@ -19,7 +19,7 @@ export async function GET(_req: Request, { params }: Params) {
   const questions = await sql`
     select id, game_id, position, prompt, options
     from questions
-    where game_id = ${game.id}
+    where game_id = ${game.id} and deleted_at is null
     order by position asc, created_at asc`;
 
   return Response.json(

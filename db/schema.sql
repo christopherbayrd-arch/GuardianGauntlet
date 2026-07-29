@@ -11,12 +11,8 @@ create table if not exists games (
   status        text not null default 'draft',
   current_index int  not null default 0,   -- which question the results walkthrough is on
   reveal        boolean not null default false, -- whether the correct answer is highlighted
-  created_at    timestamptz not null default now(),
-  deleted_at    timestamptz               -- set = in "Deleted games" (auto-purged after 30 days)
+  created_at    timestamptz not null default now()
 );
-
--- Upgrade path for databases created before the Deleted-games feature:
-alter table games add column if not exists deleted_at timestamptz;
 
 -- Allowed game modes. Dropped & re-created on every run so that re-running
 -- this file upgrades an existing database (e.g. adds 'leaderboard').
@@ -47,6 +43,16 @@ create index if not exists participants_game_idx on participants (game_id);
 -- Upgrade path for databases created before the leaderboard feature:
 alter table participants add column if not exists first_name text;
 alter table participants add column if not exists last_name  text;
+
+-- Audit & soft-delete columns (upgrade path — safe to re-run):
+--   questions.updated_at  when the question's CONTENT was last edited
+--                         (reordering/randomizing does not touch it)
+--   questions.deleted_at  soft delete: hidden from players, restorable by host
+--   games.deleted_at      soft delete: game goes to a 10-day recycle bin,
+--                         then is purged automatically
+alter table questions add column if not exists updated_at timestamptz;
+alter table questions add column if not exists deleted_at timestamptz;
+alter table games     add column if not exists deleted_at timestamptz;
 
 create table if not exists answers (
   id             uuid primary key default gen_random_uuid(),

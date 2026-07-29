@@ -1,11 +1,8 @@
 import { db } from "@/lib/db";
 import { computeLeaderboard } from "@/lib/leaderboard";
 import { jsonError, requireAdmin, rowToQuestion } from "@/lib/server";
-import { confirmationMatches, deleteConfirmationPhrase } from "@/lib/types";
 import type { GameStatus } from "@/lib/types";
-
-const IN_TRASH_MSG =
-  "This game is in Deleted games. Restore it from the console home page to keep working on it.";
+import { confirmationMatches } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -25,20 +22,29 @@ export async function GET(req: Request, { params }: Params) {
   const games = await sql`select * from games where id = ${id}`;
   const game = games[0];
   if (!game) return jsonError(404, "Game not found.");
-  if ((game as { deleted_at: string | null }).deleted_at)
-    return jsonError(410, IN_TRASH_MSG);
+  if ((game as { deleted_at?: string | null }).deleted_at) {
+    return jsonError(
+      410,
+      "This game is in Deleted games. Restore it from the console home page first."
+    );
+  }
 
-  const [questionRows, participantRows, answerRows, board] = await Promise.all([
-    sql`select * from questions where game_id = ${id}
+  const [questionRows, deletedRows, participantRows, answerRows, board] = await Promise.all([
+    sql`select * from questions where game_id = ${id} and deleted_at is null
         order by position asc, created_at asc`,
+    sql`select * from questions where game_id = ${id} and deleted_at is not null
+        order by deleted_at desc`,
     sql`select count(*)::int as n from participants where game_id = ${id}`,
-    sql`select question_id, choice_index, count(*)::int as n
-        from answers where game_id = ${id}
-        group by question_id, choice_index`,
+    sql`select a.question_id, a.choice_index, count(*)::int as n
+        from answers a
+        join questions q on q.id = a.question_id and q.deleted_at is null
+        where a.game_id = ${id}
+        group by a.question_id, a.choice_index`,
     computeLeaderboard(sql, id),
   ]);
 
   const questions = questionRows.map((q) => rowToQuestion(q as { options: unknown }));
+  const deleted_questions = deletedRows.map((q) => rowToQuestion(q as { options: unknown }));
   const counts = answerRows as { question_id: string; choice_index: number; n: number }[];
 
   // Per-option distributions — console-only preview (admin is trusted).
@@ -77,7 +83,14 @@ export async function GET(req: Request, { params }: Params) {
     participant_id: e.participant_id,
   }));
 
-  return Response.json({ game, questions, stats, distributions, leaderboard });
+  return Response.json({
+    game,
+    questions,
+    deleted_questions,
+    stats,
+    distributions,
+    leaderboard,
+  });
 }
 
 export async function PATCH(req: Request, { params }: Params) {
@@ -99,7 +112,16 @@ export async function PATCH(req: Request, { params }: Params) {
       }
     | undefined;
   if (!existing) return jsonError(404, "Game not found.");
-  if (existing.deleted_at) return jsonError(409, IN_TRASH_MSG);
+
+  // Pull the game back out of Deleted games.
+  if (body.restore === true) {
+    const rows = await sql`
+      update games set deleted_at = null where id = ${id} returning *`;
+    return Response.json({ game: rows[0] });
+  }
+  if (existing.deleted_at) {
+    return jsonError(409, "This game is in Deleted games — restore it before editing.");
+  }
 
   let title = existing.title;
   let status = existing.status;
@@ -137,12 +159,11 @@ export async function PATCH(req: Request, { params }: Params) {
 }
 
 /**
- * Move a game to "Deleted games" (soft delete). Two safeguards:
- *  1. The request must carry the typed confirmation phrase
- *     "Delete <game title>" — the server verifies it, not just the UI.
- *  2. Nothing is destroyed now: the game sits in Deleted games for 30 days
- *     (restorable from the console home page), then auto-purges. There is
- *     deliberately no way to hard-delete it sooner.
+ * Soft delete, guarded by a typed confirmation: the request body must carry
+ * { confirmation: "Delete <game title>" } (verified server-side too, so the
+ * modal can't be bypassed). The game moves to Deleted games — hidden from
+ * players instantly, restorable for 10 days, then purged automatically.
+ * There is deliberately no instant permanent delete: restore or age out.
  */
 export async function DELETE(req: Request, { params }: Params) {
   const denied = requireAdmin(req);
@@ -155,28 +176,15 @@ export async function DELETE(req: Request, { params }: Params) {
   const game = games[0] as { title: string; deleted_at: string | null } | undefined;
   if (!game) return jsonError(404, "Game not found.");
   if (game.deleted_at) {
-    return jsonError(
-      409,
-      "This game is already in Deleted games. It can only be restored — it will be removed for good 30 days after it was deleted."
-    );
+    return jsonError(409, "This game is already in Deleted games.");
   }
 
-  const body = await req.json().catch(() => ({}));
-  const confirmation =
-    typeof (body as { confirmation?: unknown }).confirmation === "string"
-      ? ((body as { confirmation: string }).confirmation)
-      : "";
+  const body = (await req.json().catch(() => ({}))) as { confirmation?: unknown };
+  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
   if (!confirmationMatches(confirmation, game.title)) {
-    return jsonError(
-      400,
-      `Deletion not confirmed. Type "${deleteConfirmationPhrase(game.title)}" to move this game to Deleted games.`
-    );
+    return jsonError(400, `Type "Delete ${game.title}" to confirm.`);
   }
 
-  const rows = await sql`
-    update games set deleted_at = now()
-    where id = ${id} and deleted_at is null
-    returning *`;
-  if (rows.length === 0) return jsonError(409, "This game is already in Deleted games.");
-  return Response.json({ game: rows[0] });
+  await sql`update games set deleted_at = now() where id = ${id}`;
+  return Response.json({ ok: true });
 }

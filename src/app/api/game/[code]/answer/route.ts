@@ -45,7 +45,8 @@ export async function POST(req: Request, { params }: Params) {
 
   const questions = await sql`
     select id, jsonb_array_length(options)::int as option_count
-    from questions where id = ${question_id} and game_id = ${game.id}`;
+    from questions
+    where id = ${question_id} and game_id = ${game.id} and deleted_at is null`;
   const question = questions[0] as { id: string; option_count: number } | undefined;
   if (!question) return jsonError(400, "That question doesn't belong to this game.");
   if (choice_index >= question.option_count) {
@@ -63,7 +64,7 @@ export async function POST(req: Request, { params }: Params) {
   const inserted = await sql`
     insert into answers (game_id, question_id, participant_id, choice_index)
     select ${game.id}, ${question_id}, ${participant_id}, ${choice_index}
-    where exists (select 1 from games where id = ${game.id} and status = 'open' and deleted_at is null)
+    where exists (select 1 from games where id = ${game.id} and status = 'open')
     on conflict (question_id, participant_id)
     do update set choice_index = excluded.choice_index
     returning id`;

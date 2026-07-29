@@ -21,16 +21,17 @@ export async function computeLeaderboard(
              p.first_name,
              p.last_name,
              count(a.id) filter (where a.choice_index = q.correct_index)::int as correct,
-             count(a.id)::int as answered
+             count(q.id)::int as answered
       from participants p
       left join answers a on a.participant_id = p.id and a.game_id = ${gameId}
-      left join questions q on q.id = a.question_id
+      left join questions q on q.id = a.question_id and q.deleted_at is null
       where p.game_id = ${gameId}
         and p.first_name is not null
         and p.last_name  is not null
       group by p.id, p.first_name, p.last_name
       order by correct desc, lower(p.first_name) asc, lower(p.last_name) asc, p.id asc`,
-    sql`select count(*)::int as n from questions where game_id = ${gameId}`,
+    sql`select count(*)::int as n
+        from questions where game_id = ${gameId} and deleted_at is null`,
   ]);
 
   const entries = (rows as {

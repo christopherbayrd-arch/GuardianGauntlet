@@ -32,8 +32,7 @@ export async function POST(req: Request, { params }: Params) {
 
   const sql = db();
   const games = await sql`
-    select id from games
-    where code = ${code.toUpperCase()} and deleted_at is null`;
+    select id from games where code = ${code.toUpperCase()} and deleted_at is null`;
   const game = games[0] as { id: string } | undefined;
   if (!game) return jsonError(404, "Game not found.");
 

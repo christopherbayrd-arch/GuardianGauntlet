@@ -25,11 +25,13 @@ export async function GET(_req: Request, { params }: Params) {
 
   const [questions, countRows] = await Promise.all([
     sql`select id, position, options, correct_index
-        from questions where game_id = ${game.id}
+        from questions where game_id = ${game.id} and deleted_at is null
         order by position asc, created_at asc`,
-    sql`select question_id, choice_index, count(*)::int as n
-        from answers where game_id = ${game.id}
-        group by question_id, choice_index`,
+    sql`select a.question_id, a.choice_index, count(*)::int as n
+        from answers a
+        join questions q on q.id = a.question_id and q.deleted_at is null
+        where a.game_id = ${game.id}
+        group by a.question_id, a.choice_index`,
   ]);
 
   const results = (questions as {

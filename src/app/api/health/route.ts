@@ -3,60 +3,65 @@ import { db, findDatabaseUrl } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
- * Self-diagnosis: open https://YOUR-APP.vercel.app/api/health in a browser.
- * Reports exactly which setup step is missing, in plain English.
- * Safe to leave public — it never reveals secrets, only whether they exist.
+ * One-stop checkup: environment variables, database connectivity, and
+ * whether the schema is current (columns added by newer features exist).
+ * Open /api/health in a browser whenever something seems off.
  */
 export async function GET() {
   const checks: Record<string, string> = {};
-  let ok = true;
 
-  // 1 — console passcode
-  if (process.env.ADMIN_PASSCODE) {
-    checks.admin_passcode = "✓ set";
-  } else {
-    ok = false;
-    checks.admin_passcode =
-      "✗ MISSING — Vercel → Settings → Environment Variables → add ADMIN_PASSCODE, then Deployments → Redeploy. (Variables only take effect on a new deployment.)";
-  }
+  checks.admin_passcode = process.env.ADMIN_PASSCODE
+    ? "✓ set"
+    : "✗ missing — add ADMIN_PASSCODE in Vercel → Settings → Environment Variables, then redeploy";
 
-  // 2 — database connection string
   const found = findDatabaseUrl();
-  if (!found) {
-    ok = false;
-    checks.database_url =
-      "✗ MISSING — attach Neon via Vercel → Storage → Create Database (or add DATABASE_URL yourself), then Redeploy.";
-  } else {
-    checks.database_url = `✓ found (as ${found.name})`;
+  checks.database_url = found
+    ? `✓ found (as ${found.name})`
+    : "✗ missing — attach Neon in Vercel → Storage, or add DATABASE_URL yourself, then redeploy";
 
-    // 3 — can we reach the database, and do the tables exist?
+  if (found) {
     try {
-      const rows = await db()`select count(*)::int as n from games`;
-      checks.database = `✓ connected — ${rows[0].n} game(s) in the database`;
+      const sql = db();
+      const games = await sql`select count(*)::int as n from games`;
+      checks.database = `✓ connected — ${(games[0] as { n: number }).n} game(s) in the database`;
 
-      // 3b — schema up to date? (deleted_at powers the Deleted-games trash)
-      try {
-        await db()`select deleted_at from games limit 0`;
-        checks.schema = "✓ up to date";
-      } catch {
-        ok = false;
-        checks.schema =
-          "✗ OUT OF DATE — the games.deleted_at column is missing (needed for Deleted games / restore). Open Neon → SQL Editor → paste ALL of db/schema.sql → Run. Then refresh this page.";
-      }
+      // Newer features need newer columns — detect a stale schema so the fix
+      // ("re-run db/schema.sql in Neon's SQL Editor") is obvious.
+      const cols = (await sql`
+        select table_name, column_name
+        from information_schema.columns
+        where (table_name = 'games' and column_name = 'deleted_at')
+           or (table_name = 'questions' and column_name in ('updated_at', 'deleted_at'))
+           or (table_name = 'participants' and column_name in ('first_name', 'last_name'))
+      `) as { table_name: string; column_name: string }[];
+      const have = new Set(cols.map((c) => `${c.table_name}.${c.column_name}`));
+      const needed = [
+        "games.deleted_at",
+        "questions.updated_at",
+        "questions.deleted_at",
+        "participants.first_name",
+        "participants.last_name",
+      ];
+      const missing = needed.filter((c) => !have.has(c));
+      checks.schema =
+        missing.length === 0
+          ? "✓ up to date"
+          : `✗ missing ${missing.join(", ")} — paste db/schema.sql into Neon's SQL Editor and Run (safe to re-run), then reload`;
     } catch (e) {
-      ok = false;
-      const msg = e instanceof Error ? e.message : String(e);
-      checks.database = /does not exist/i.test(msg)
-        ? "✗ TABLES MISSING — open your Neon project (console.neon.tech) → SQL Editor → paste ALL of db/schema.sql → Run. Then refresh this page."
-        : `✗ CONNECTION FAILED — ${msg}`;
+      checks.database = `✗ could not connect — ${
+        e instanceof Error ? e.message : "unknown error"
+      }`;
     }
   }
 
+  const allGood = Object.values(checks).every((v) => v.startsWith("✓"));
   return Response.json(
     {
-      status: ok ? "✓ Everything looks good — open /console and play!" : "✗ Action needed — see below",
+      status: allGood
+        ? "✓ Everything looks good — open /console and play!"
+        : "✗ Something needs attention — see below",
       ...checks,
     },
-    { status: 200, headers: { "cache-control": "no-store" } }
+    { headers: { "cache-control": "no-store" } }
   );
 }

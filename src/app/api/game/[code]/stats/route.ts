@@ -11,16 +11,17 @@ export async function GET(_req: Request, { params }: Params) {
   const sql = db();
 
   const games = await sql`
-    select id from games
-    where code = ${code.toUpperCase()} and deleted_at is null`;
+    select id from games where code = ${code.toUpperCase()} and deleted_at is null`;
   const game = games[0];
   if (!game) return jsonError(404, "Game not found.");
 
   const [participantRows, answerRows] = await Promise.all([
     sql`select count(*)::int as n from participants where game_id = ${game.id}`,
-    sql`select question_id, count(*)::int as n
-        from answers where game_id = ${game.id}
-        group by question_id`,
+    sql`select a.question_id, count(*)::int as n
+        from answers a
+        join questions q on q.id = a.question_id and q.deleted_at is null
+        where a.game_id = ${game.id}
+        group by a.question_id`,
   ]);
 
   const by_question = (answerRows as { question_id: string; n: number }[]).map(

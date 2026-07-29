@@ -109,6 +109,11 @@ If it's not a git repo yet, run `git init -b main && git add -A && git commit -m
    Once they're all in, **🔀 Randomize** (shown in Setup mode) shuffles them
    into a random order — click it again for a fresh shuffle.
 3. Do a practice run with a colleague, then **Reset answers & players**.
+4. **Pre-game audit:** in Setup mode every question shows when it was added
+   and — highlighted in gold — when its content was last edited. Flip the
+   toggle from **Game order** to **Recently edited** to surface the latest
+   changes first, so you can spot anything that moved since you last looked.
+   (Reordering/randomizing doesn't count as an edit — only content changes do.)
 
 **Day of**
 
@@ -145,23 +150,6 @@ to change it (4–120).
   scratch. Old games keep their results until you delete them.
 - Several games can exist side by side — each has its own code, QR, and links.
 
-## Deleting a game (and getting it back)
-
-Deleting is deliberately hard to do by accident, and easy to undo:
-
-1. Console → open the game → **Housekeeping** → **Delete game…**
-2. Type the confirmation phrase — **`Delete`** followed by the game's exact
-   title (e.g. `Delete National Purchasing Meeting 2026`). The button stays
-   disabled until it matches (capitalization doesn't matter). The server
-   double-checks the phrase too.
-3. The game moves to **Deleted games** at the bottom of the console home page.
-   Its QR code, display, and phones stop working immediately.
-4. Changed your mind? Hit **Restore** there — the game comes back exactly as it
-   was, questions, players, and answers included.
-5. After **30 days** in Deleted games it's removed automatically, for good.
-   There's intentionally no "delete forever" button — a deleted game can only
-   be restored or age out.
-
 ## Local development (optional)
 
 ```bash
@@ -172,6 +160,13 @@ npm run dev                  # http://localhost:3000
 
 ## Good to know
 
+- **Deleting is forgiving — and deliberate.** Deleted questions grey out in
+  the console — players never see them and they don't count toward any
+  score — and can be restored (or removed for good) anytime. Deleting a
+  whole game asks you to type `Delete <game title>` first, then moves it to
+  **Deleted games** on the console home page: restorable with one click for
+  10 days, after which it's removed automatically. (There's intentionally no
+  instant permanent delete for games — restore it or let it age out.)
 - **Locking is enforced by the database**, not just the UI — late submissions
   are rejected server-side the instant you hit Lock.
 - Phones and the big screen sync within ~3 seconds (simple polling — no
@@ -190,9 +185,7 @@ npm run dev                  # http://localhost:3000
   that would let people hijack the leader.)
 - **Upgrading an existing database:** `db/schema.sql` is safe to re-run — after
   pulling new code, paste it into Neon's SQL Editor again and Run. It adds the
-  name columns, the Leaderboard mode, and the `deleted_at` column behind
-  Deleted games without touching stored answers. (`/api/health` will tell you
-  if the app is running against a database that's missing an upgrade.)
+  name columns and the Leaderboard mode without touching stored answers.
 
 ## Project map
 

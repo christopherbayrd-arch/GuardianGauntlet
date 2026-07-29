@@ -9,25 +9,40 @@ import {
   getPasscode,
   setPasscode,
 } from "@/lib/adminApi";
-import type { GameListItem } from "@/lib/types";
-import { daysLeftInTrash } from "@/lib/types";
+import type { DeletedGameListItem, GameListItem } from "@/lib/types";
 import { Shield, Spinner, StatusPill } from "@/components/ui";
+
+import { DELETED_RETENTION_DAYS } from "@/lib/types";
+
+const RETENTION_DAYS = DELETED_RETENTION_DAYS;
+
+const purgeNote = (deletedAt: string) => {
+  const daysGone = Math.floor((Date.now() - new Date(deletedAt).getTime()) / 86_400_000);
+  const left = RETENTION_DAYS - daysGone;
+  return left <= 0
+    ? "purging soon"
+    : `gone for good in ${left} day${left === 1 ? "" : "s"}`;
+};
 
 export default function ConsolePage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [games, setGames] = useState<GameListItem[]>([]);
+  const [deletedGames, setDeletedGames] = useState<DeletedGameListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [creating, setCreating] = useState(false);
-  const [restoringId, setRestoringId] = useState<string | null>(null);
   const router = useRouter();
 
   const loadGames = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await adminFetch<{ games: GameListItem[] }>("/api/admin/games");
+      const data = await adminFetch<{
+        games: GameListItem[];
+        deleted_games: DeletedGameListItem[];
+      }>("/api/admin/games");
       setGames(data.games);
+      setDeletedGames(data.deleted_games ?? []);
       setAuthed(true);
       setError(null);
     } catch (e) {
@@ -65,28 +80,17 @@ export default function ConsolePage() {
     }
   };
 
-  const restore = async (g: GameListItem) => {
-    setRestoringId(g.id);
-    setError(null);
+  const restoreGame = async (id: string) => {
     try {
-      await adminFetch(`/api/admin/games/${g.id}/restore`, { method: "POST" });
+      await adminFetch(`/api/admin/games/${id}`, {
+        method: "PATCH",
+        body: { restore: true },
+      });
       await loadGames();
     } catch (e) {
-      if (e instanceof AdminAuthError) setAuthed(false);
-      else setError(e instanceof Error ? e.message : "Could not restore the game.");
-    } finally {
-      setRestoringId(null);
+      setError(e instanceof Error ? e.message : "Restore failed.");
     }
   };
-
-  const activeGames = games.filter((g) => !g.deleted_at);
-  const deletedGames = games
-    .filter((g) => g.deleted_at)
-    .sort(
-      (a, b) =>
-        new Date(b.deleted_at as string).getTime() -
-        new Date(a.deleted_at as string).getTime()
-    );
 
   if (authed === false) return <PasscodeGate onSuccess={loadGames} />;
 
@@ -124,13 +128,13 @@ export default function ConsolePage() {
 
       {loading && games.length === 0 ? (
         <Spinner label="Loading games…" />
-      ) : activeGames.length === 0 ? (
+      ) : games.length === 0 ? (
         <div className="card p-8 text-center text-steel-600">
           No games yet — create your first one above.
         </div>
       ) : (
         <ul className="space-y-3">
-          {activeGames.map((g) => (
+          {games.map((g) => (
             <li key={g.id} className="card p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -174,59 +178,33 @@ export default function ConsolePage() {
       )}
 
       {deletedGames.length > 0 && (
-        <section className="mt-12">
-          <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
-            Deleted games
+        <section className="mt-10">
+          <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-steel-500">
+            Deleted games — restorable for {RETENTION_DAYS} days, then removed automatically
           </h2>
-          <p className="mb-3 mt-1 text-xs text-steel-600">
-            Kept for 30 days, then removed automatically — restore a game to
-            bring it back exactly as it was, questions and answers included.
-          </p>
-          <ul className="space-y-3">
-            {deletedGames.map((g) => {
-              const days = daysLeftInTrash(g.deleted_at as string);
-              return (
-                <li
-                  key={g.id}
-                  className="card border-dashed bg-steel-50 p-4 opacity-90"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-lg font-bold text-steel-700">
-                        {g.title}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-steel-600">
-                        <span className="chip bg-steel-100 font-mono text-navy-800">
-                          {g.code}
-                        </span>
-                        <span>
-                          {g.question_count} question{g.question_count === 1 ? "" : "s"}
-                        </span>
-                        <span>·</span>
-                        <span>
-                          {g.participant_count} player{g.participant_count === 1 ? "" : "s"}
-                        </span>
-                        <span>·</span>
-                        <span className="font-semibold text-red-700">
-                          {days <= 0
-                            ? "removed any time now"
-                            : days === 1
-                              ? "auto-removes in 1 day"
-                              : `auto-removes in ${days} days`}
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      className="btn btn-steel shrink-0"
-                      disabled={restoringId !== null}
-                      onClick={() => restore(g)}
-                    >
-                      {restoringId === g.id ? "Restoring…" : "Restore"}
-                    </button>
+          <ul className="space-y-2">
+            {deletedGames.map((g) => (
+              <li
+                key={g.id}
+                className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-steel-300 bg-steel-50 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-bold text-steel-600 line-through decoration-steel-400">
+                    {g.title}
                   </div>
-                </li>
-              );
-            })}
+                  <div className="mt-0.5 text-[11px] text-steel-500">
+                    <span className="font-mono">{g.code}</span> ·{" "}
+                    {purgeNote(g.deleted_at)}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-ghost !px-3 !py-1.5 text-xs"
+                  onClick={() => restoreGame(g.id)}
+                >
+                  ↩ Restore
+                </button>
+              </li>
+            ))}
           </ul>
         </section>
       )}

@@ -14,16 +14,11 @@ export async function POST(req: Request, { params }: Params) {
   const body = await req.json().catch(() => ({}));
   const sql = db();
 
-  // A game sitting in "Deleted games" can't be reset or duplicated —
-  // restore it from the console home page first.
-  const found = await sql`select deleted_at from games where id = ${id}`;
-  const target = found[0] as { deleted_at: string | null } | undefined;
+  const gameRows = await sql`select deleted_at from games where id = ${id}`;
+  const target = gameRows[0] as { deleted_at: string | null } | undefined;
   if (!target) return jsonError(404, "Game not found.");
   if (target.deleted_at) {
-    return jsonError(
-      409,
-      "This game is in Deleted games. Restore it from the console home page first."
-    );
+    return jsonError(409, "This game is in Deleted games — restore it first.");
   }
 
   if (body.action === "reset") {
@@ -48,7 +43,7 @@ export async function POST(req: Request, { params }: Params) {
         await sql`
           insert into questions (game_id, position, prompt, options, correct_index)
           select ${newGame.id}, position, prompt, options, correct_index
-          from questions where game_id = ${id}`;
+          from questions where game_id = ${id} and deleted_at is null`;
         return Response.json({ game: created[0] });
       } catch (e) {
         if (!isUniqueViolation(e)) {

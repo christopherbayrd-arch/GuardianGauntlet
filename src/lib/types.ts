@@ -8,32 +8,6 @@ export interface Game {
   current_index: number;
   reveal: boolean;
   created_at: string;
-  /** Set when the game is in "Deleted games" (admin payloads only). */
-  deleted_at?: string | null;
-}
-
-/** How long a deleted game stays restorable before it's purged for good. */
-export const DELETED_RETENTION_DAYS = 30;
-
-/** The exact phrase a host must type to delete a game. */
-export function deleteConfirmationPhrase(title: string): string {
-  return `Delete ${title}`;
-}
-
-/**
- * Does the typed confirmation match "Delete <title>"?
- * Forgiving about capitalization and extra spaces — strict about the words.
- */
-export function confirmationMatches(input: string, title: string): boolean {
-  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-  return norm(input) === norm(deleteConfirmationPhrase(title));
-}
-
-/** Whole days left before a deleted game is purged (0 = can go any time now). */
-export function daysLeftInTrash(deletedAt: string, now = Date.now()): number {
-  const purgeAt =
-    new Date(deletedAt).getTime() + DELETED_RETENTION_DAYS * 86_400_000;
-  return Math.max(0, Math.ceil((purgeAt - now) / 86_400_000));
 }
 
 export interface PublicQuestion {
@@ -46,6 +20,10 @@ export interface PublicQuestion {
 
 export interface AdminQuestion extends PublicQuestion {
   correct_index: number;
+  created_at: string;
+  /** Set only when the question's content was edited after creation. */
+  updated_at: string | null;
+  deleted_at?: string | null;
 }
 
 export interface GameStats {
@@ -89,6 +67,27 @@ export interface LeaderboardPayload {
 export interface GameListItem extends Game {
   question_count: number;
   participant_count: number;
+}
+
+/** A soft-deleted game sitting in the recycle bin. */
+export interface DeletedGameListItem {
+  id: string;
+  code: string;
+  title: string;
+  deleted_at: string;
+}
+
+/** Days a deleted game stays restorable before it is purged for good. */
+export const DELETED_RETENTION_DAYS = 10;
+
+/**
+ * Deleting a game requires typing "Delete <game title>". Case-insensitive,
+ * and forgiving about extra whitespace — but nothing less than the full
+ * phrase counts.
+ */
+export function confirmationMatches(input: string, title: string): boolean {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  return norm(input) === norm(`Delete ${title}`);
 }
 
 export const STATUS_LABELS: Record<GameStatus, string> = {

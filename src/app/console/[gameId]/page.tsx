@@ -13,16 +13,13 @@ import type {
   GameStatus,
   LeaderboardEntry,
 } from "@/lib/types";
-import {
-  OPTION_LETTERS,
-  confirmationMatches,
-  deleteConfirmationPhrase,
-} from "@/lib/types";
+import { confirmationMatches, DELETED_RETENTION_DAYS, OPTION_LETTERS } from "@/lib/types";
 import { CopyButton, Spinner, StatusPill } from "@/components/ui";
 
 interface Detail {
   game: Game;
   questions: AdminQuestion[];
+  deleted_questions: AdminQuestion[];
   stats: GameStats;
   distributions: Distribution[];
   leaderboard: LeaderboardEntry[];
@@ -36,6 +33,14 @@ const MODES: { status: GameStatus; label: string; desc: string }[] = [
   { status: "leaderboard", label: "5 · Leaderboard", desc: "Crown the winners — top 10 on the big screen." },
 ];
 
+const fmtStamp = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
 export default function GameConsolePage() {
   const params = useParams<{ gameId: string }>();
   const gameId = params.gameId;
@@ -46,9 +51,11 @@ export default function GameConsolePage() {
   const [stats, setStats] = useState<GameStats | null>(null);
   const [distributions, setDistributions] = useState<Distribution[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [deletedQuestions, setDeletedQuestions] = useState<AdminQuestion[]>([]);
+  const [sortMode, setSortMode] = useState<"order" | "edited">("order");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [editing, setEditing] = useState<string | null>(null); // question id | "new" | "bulk" | null
   const [origin, setOrigin] = useState("");
   const editingRef = useRef(editing);
@@ -74,6 +81,7 @@ export default function GameConsolePage() {
       setStats(d.stats);
       setDistributions(d.distributions);
       setLeaderboard(d.leaderboard ?? []);
+      setDeletedQuestions(d.deleted_questions ?? []);
       if (editingRef.current === null) setQuestions(d.questions);
       setError(null);
     } catch (e) {
@@ -142,10 +150,40 @@ export default function GameConsolePage() {
   };
 
   const deleteQuestion = async (id: string) => {
-    if (!confirm("Delete this question?")) return;
+    if (
+      !confirm(
+        "Delete this question? Players never see deleted questions, and it " +
+          "won't count toward anyone's score — but you can restore it from " +
+          "the deleted list below until you remove it for good."
+      )
+    )
+      return;
     try {
       await adminFetch(`/api/admin/questions/${id}`, { method: "DELETE" });
-      setQuestions((qs) => qs.filter((q) => q.id !== id));
+      await load();
+    } catch (e) {
+      if (!authFail(e)) setError(e instanceof Error ? e.message : "Delete failed.");
+    }
+  };
+
+  const restoreQuestion = async (id: string) => {
+    try {
+      await adminFetch(`/api/admin/questions/${id}`, {
+        method: "PATCH",
+        body: { restore: true },
+      });
+      await load();
+    } catch (e) {
+      if (!authFail(e)) setError(e instanceof Error ? e.message : "Restore failed.");
+    }
+  };
+
+  const destroyQuestion = async (id: string) => {
+    if (!confirm("Permanently delete this question and its answers? This cannot be undone."))
+      return;
+    try {
+      await adminFetch(`/api/admin/questions/${id}?permanent=1`, { method: "DELETE" });
+      await load();
     } catch (e) {
       if (!authFail(e)) setError(e instanceof Error ? e.message : "Delete failed.");
     }
@@ -197,6 +235,20 @@ export default function GameConsolePage() {
     }
   };
 
+  /* the audit sort only exists in Setup — snap back if the mode changes */
+  useEffect(() => {
+    if (game?.status !== "draft" && sortMode !== "order") setSortMode("order");
+  }, [game?.status, sortMode]);
+
+  const displayQuestions =
+    sortMode === "edited"
+      ? [...questions].sort(
+          (a, b) =>
+            new Date(b.updated_at ?? b.created_at).getTime() -
+            new Date(a.updated_at ?? a.created_at).getTime()
+        )
+      : questions;
+
   const removeParticipant = async (pid: string, name: string) => {
     if (
       !confirm(
@@ -242,12 +294,7 @@ export default function GameConsolePage() {
     }
   };
 
-  /**
-   * Move the game to "Deleted games". The typed confirmation phrase is sent
-   * along and re-checked by the server. Returns an error message to show
-   * inside the dialog, or null on success (which navigates away).
-   */
-  const deleteGame = async (confirmation: string): Promise<string | null> => {
+  const deleteGame = async (confirmation: string) => {
     setBusy(true);
     try {
       await adminFetch(`/api/admin/games/${gameId}`, {
@@ -255,12 +302,12 @@ export default function GameConsolePage() {
         body: { confirmation },
       });
       router.push("/console");
-      return null;
     } catch (e) {
-      if (authFail(e)) return null;
-      return e instanceof Error ? e.message : "Delete failed.";
-    } finally {
       setBusy(false);
+      if (!authFail(e)) {
+        setDeleteOpen(false);
+        setError(e instanceof Error ? e.message : "Delete failed.");
+      }
     }
   };
 
@@ -612,6 +659,33 @@ export default function GameConsolePage() {
           <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
             Questions ({questions.length})
           </h2>
+          {game.status === "draft" && questions.length >= 2 && (
+            <div className="flex items-center rounded-lg bg-steel-100 p-0.5 text-xs font-semibold">
+              <button
+                className={
+                  "rounded-md px-2.5 py-1 transition-colors " +
+                  (sortMode === "order"
+                    ? "bg-white text-navy-900 shadow-sm"
+                    : "text-steel-600 hover:text-navy-800")
+                }
+                onClick={() => setSortMode("order")}
+              >
+                Game order
+              </button>
+              <button
+                className={
+                  "rounded-md px-2.5 py-1 transition-colors " +
+                  (sortMode === "edited"
+                    ? "bg-white text-navy-900 shadow-sm"
+                    : "text-steel-600 hover:text-navy-800")
+                }
+                title="Audit view: most recently edited first"
+                onClick={() => setSortMode("edited")}
+              >
+                Recently edited
+              </button>
+            </div>
+          )}
           <div className="flex gap-2">
             {game.status === "draft" && questions.length >= 2 && (
               <button
@@ -664,7 +738,9 @@ export default function GameConsolePage() {
         )}
 
         <ul className="space-y-3">
-          {questions.map((q, i) => (
+          {displayQuestions.map((q) => {
+            const i = questions.indexOf(q);
+            return (
             <li key={q.id} className="rounded-xl border border-steel-200 p-4">
               {editing === q.id ? (
                 <QuestionForm
@@ -681,7 +757,7 @@ export default function GameConsolePage() {
                     </span>
                     <button
                       className="text-steel-500 hover:text-navy-800 disabled:opacity-30"
-                      disabled={i === 0}
+                      disabled={i === 0 || sortMode !== "order"}
                       onClick={() => move(q.id, -1)}
                       aria-label="Move up"
                     >
@@ -689,7 +765,7 @@ export default function GameConsolePage() {
                     </button>
                     <button
                       className="text-steel-500 hover:text-navy-800 disabled:opacity-30"
-                      disabled={i === questions.length - 1}
+                      disabled={i === questions.length - 1 || sortMode !== "order"}
                       onClick={() => move(q.id, 1)}
                       aria-label="Move down"
                     >
@@ -717,6 +793,18 @@ export default function GameConsolePage() {
                         </button>
                       </div>
                     </div>
+                    {game.status === "draft" && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-medium">
+                        <span className="rounded-full bg-steel-100 px-2 py-0.5 text-steel-700">
+                          Added {fmtStamp(q.created_at)}
+                        </span>
+                        {q.updated_at && (
+                          <span className="rounded-full bg-gold-100 px-2 py-0.5 font-semibold text-navy-900 ring-1 ring-gold-500">
+                            ✎ Edited {fmtStamp(q.updated_at)}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <ul className="mt-2 flex flex-wrap gap-2">
                       {q.options.map((opt, oi) => {
                         const isCorrect = oi === q.correct_index;
@@ -745,8 +833,50 @@ export default function GameConsolePage() {
                 </div>
               )}
             </li>
-          ))}
+            );
+          })}
         </ul>
+
+        {deletedQuestions.length > 0 && (
+          <div className="mt-5 border-t border-steel-200 pt-4">
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-steel-500">
+              Deleted questions ({deletedQuestions.length}) — players never see these
+            </h3>
+            <ul className="space-y-2">
+              {deletedQuestions.map((q) => (
+                <li
+                  key={q.id}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-steel-300 bg-steel-50 px-4 py-2.5"
+                >
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-steel-500 line-through decoration-steel-400">
+                    {q.prompt}
+                  </p>
+                  {q.deleted_at && (
+                    <span className="shrink-0 text-[11px] text-steel-500">
+                      Deleted {fmtStamp(q.deleted_at)}
+                    </span>
+                  )}
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      className="btn btn-ghost !px-3 !py-1 text-xs"
+                      disabled={busy}
+                      onClick={() => restoreQuestion(q.id)}
+                    >
+                      ↩ Restore
+                    </button>
+                    <button
+                      className="btn btn-danger !px-3 !py-1 text-xs"
+                      disabled={busy}
+                      onClick={() => destroyQuestion(q.id)}
+                    >
+                      Delete forever
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* Danger zone */}
@@ -761,26 +891,23 @@ export default function GameConsolePage() {
           <button className="btn btn-danger" disabled={busy} onClick={() => action("reset")}>
             Reset answers & players
           </button>
-          <button
-            className="btn btn-danger"
-            disabled={busy}
-            onClick={() => setConfirmingDelete(true)}
-          >
-            Delete game…
+          <button className="btn btn-danger" disabled={busy} onClick={() => setDeleteOpen(true)}>
+            Delete game
           </button>
         </div>
         <p className="mt-3 text-xs text-steel-600">
           Run a practice round today, then <b>Reset answers & players</b> so the room
           starts clean on game day. Deleted games sit in <b>Deleted games</b> on the
-          console home page for 30 days — restorable until then, removed for good after.
+          console home page for {DELETED_RETENTION_DAYS} days — restorable anytime
+          until then.
         </p>
       </section>
 
-      {confirmingDelete && (
-        <DeleteGameDialog
+      {deleteOpen && (
+        <DeleteGameModal
           title={game.title}
           busy={busy}
-          onCancel={() => setConfirmingDelete(false)}
+          onCancel={() => setDeleteOpen(false)}
           onConfirm={deleteGame}
         />
       )}
@@ -788,15 +915,7 @@ export default function GameConsolePage() {
   );
 }
 
-/* ────────────────────────── helpers ────────────────────────── */
-
-/**
- * Type-to-confirm delete dialog. The delete button stays disabled until the
- * host types "Delete <game title>" — a slip of the mouse can't wipe a game.
- * Even then nothing is destroyed yet: the game moves to Deleted games for
- * 30 days, restorable from the console home page.
- */
-function DeleteGameDialog({
+function DeleteGameModal({
   title,
   busy,
   onCancel,
@@ -805,12 +924,11 @@ function DeleteGameDialog({
   title: string;
   busy: boolean;
   onCancel: () => void;
-  onConfirm: (confirmation: string) => Promise<string | null>;
+  onConfirm: (confirmation: string) => void;
 }) {
-  const [typed, setTyped] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const phrase = deleteConfirmationPhrase(title);
-  const matches = confirmationMatches(typed, title);
+  const [value, setValue] = useState("");
+  const phrase = `Delete ${title}`;
+  const matches = confirmationMatches(value, title);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -820,70 +938,56 @@ function DeleteGameDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!matches || busy) return;
-    const msg = await onConfirm(typed);
-    if (msg) setError(msg);
-  };
-
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/70 p-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/60 px-4"
+      onClick={onCancel}
     >
-      <form
-        onSubmit={submit}
-        className="card slide-in w-full max-w-md space-y-4 p-6"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Delete game"
+      <div
+        className="card slide-in w-full max-w-md p-6"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div>
-          <h2 className="text-lg font-extrabold text-navy-900">
-            Delete “{title}”?
-          </h2>
-          <p className="mt-2 text-sm text-steel-700">
-            The game moves to <b>Deleted games</b> on the console home page —
-            questions, players, and answers go with it. You can restore it from
-            there for <b>30 days</b>; after that it&apos;s removed automatically.
-          </p>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-navy-800">
-            To confirm, type{" "}
-            <span className="rounded bg-steel-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-navy-900">
-              {phrase}
-            </span>
-          </label>
+        <h2 className="text-lg font-extrabold text-navy-900">Delete this game?</h2>
+        <p className="mt-2 text-sm text-steel-600">
+          Players lose access immediately. The game moves to{" "}
+          <b>Deleted games</b> on the console home page, where you can restore
+          it for {DELETED_RETENTION_DAYS} days — after that it&apos;s removed
+          for good, along with its questions and answers.
+        </p>
+        <p className="mt-3 text-sm text-steel-700">
+          To confirm, type{" "}
+          <code className="rounded bg-steel-100 px-1.5 py-0.5 text-xs font-bold text-navy-900">
+            {phrase}
+          </code>
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (matches && !busy) onConfirm(value);
+          }}
+        >
           <input
-            className="input"
-            value={typed}
-            onChange={(e) => {
-              setTyped(e.target.value);
-              setError(null);
-            }}
+            className="input mt-2"
             placeholder={phrase}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
             autoFocus
-            spellCheck={false}
-            autoComplete="off"
           />
-        </div>
-        {error && <p className="text-sm font-medium text-red-600">{error}</p>}
-        <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onCancel}>
-            Cancel
-          </button>
-          <button className="btn btn-danger" disabled={!matches || busy}>
-            {busy ? "Deleting…" : "Delete this game"}
-          </button>
-        </div>
-      </form>
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <button type="button" className="btn btn-ghost" onClick={onCancel}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" disabled={!matches || busy}>
+              {busy ? "Deleting…" : "Delete game"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
+
+/* ────────────────────────── helpers ────────────────────────── */
 
 function TitleEditor({
   title,
