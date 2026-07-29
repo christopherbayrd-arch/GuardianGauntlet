@@ -4,26 +4,38 @@ import { useState } from "react";
 import type { GameStatus } from "@/lib/types";
 import { STATUS_LABELS } from "@/lib/types";
 
+/**
+ * Guardian Gauntlet mark: split-field shield with a gold question mark.
+ * Self-coloured on purpose — the two field tones sit above navy-900 so the
+ * shield still reads as an object on the dark screens, and below white so it
+ * holds on the light console. Halves are drawn as two paths (no clipPath) so
+ * repeated instances on a page can't collide over an element id.
+ */
 export function Shield({ className = "h-8 w-8" }: { className?: string }) {
   return (
     <svg viewBox="0 0 64 64" className={className} aria-hidden="true">
+      {/* left field */}
+      <path d="M32 6 L10 13.5 V33.5 C10 45.5 19.4 54.5 32 58 Z" fill="#16294a" />
+      {/* right field */}
+      <path d="M32 6 L54 13.5 V33.5 C54 45.5 44.6 54.5 32 58 Z" fill="#26497f" />
+      {/* steel rim */}
       <path
-        d="M32 6 L54 14 V32 C54 46 44.5 56 32 60 C19.5 56 10 46 10 32 V14 Z"
-        fill="currentColor"
-        opacity="0.25"
-      />
-      <path
-        d="M32 12 L48 18 V32 C48 42.5 41 50 32 53.5 C23 50 16 42.5 16 32 V18 Z"
-        fill="currentColor"
-      />
-      <path
-        d="M25 32 L30 37 L40 26"
-        stroke="#e9b44c"
-        strokeWidth="4.5"
+        d="M32 6 L54 13.5 V33.5 C54 45.5 44.6 54.5 32 58 C19.4 54.5 10 45.5 10 33.5 V13.5 Z"
         fill="none"
+        stroke="#7b9ac2"
+        strokeWidth="3"
+        strokeLinejoin="round"
+      />
+      {/* question mark */}
+      <path
+        d="M24.4 31.13 A7.6 7.6 0 1 1 32.84 37.82 L32.84 42.53"
+        fill="none"
+        stroke="#e9b44c"
+        strokeWidth="5.2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+      <circle cx="32.84" cy="49.33" r="3" fill="#e9b44c" />
     </svg>
   );
 }
