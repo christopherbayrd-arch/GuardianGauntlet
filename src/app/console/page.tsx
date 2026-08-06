@@ -9,7 +9,7 @@ import {
   getPasscode,
   setPasscode,
 } from "@/lib/adminApi";
-import type { DeletedGameListItem, GameListItem } from "@/lib/types";
+import type { DeletedGameListItem, GameGroup, GameListItem } from "@/lib/types";
 import { Shield, Spinner, StatusPill } from "@/components/ui";
 
 import { DELETED_RETENTION_DAYS } from "@/lib/types";
@@ -27,11 +27,16 @@ const purgeNote = (deletedAt: string) => {
 export default function ConsolePage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [games, setGames] = useState<GameListItem[]>([]);
+  const [groups, setGroups] = useState<GameGroup[]>([]);
   const [deletedGames, setDeletedGames] = useState<DeletedGameListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
+  const [newGroupId, setNewGroupId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [addingGroup, setAddingGroup] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
   const router = useRouter();
 
   const loadGames = useCallback(async () => {
@@ -40,8 +45,10 @@ export default function ConsolePage() {
       const data = await adminFetch<{
         games: GameListItem[];
         deleted_games: DeletedGameListItem[];
+        groups: GameGroup[];
       }>("/api/admin/games");
       setGames(data.games);
+      setGroups(data.groups ?? []);
       setDeletedGames(data.deleted_games ?? []);
       setAuthed(true);
       setError(null);
@@ -71,7 +78,10 @@ export default function ConsolePage() {
     try {
       const data = await adminFetch<{ game: { id: string } }>("/api/admin/games", {
         method: "POST",
-        body: { title: newTitle || "Untitled game" },
+        body: {
+          title: newTitle || "Untitled game",
+          ...(newGroupId ? { group_id: newGroupId } : {}),
+        },
       });
       router.push(`/console/${data.game.id}`);
     } catch (e) {
@@ -92,7 +102,86 @@ export default function ConsolePage() {
     }
   };
 
+  const addGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!groupName.trim() || groupBusy) return;
+    setGroupBusy(true);
+    try {
+      await adminFetch("/api/admin/groups", {
+        method: "POST",
+        body: { name: groupName.trim() },
+      });
+      setGroupName("");
+      setAddingGroup(false);
+      setError(null);
+      await loadGames();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not add the group.");
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  const renameGroup = async (g: GameGroup) => {
+    const name = prompt(`Rename "${g.name}" to:`, g.name);
+    if (name === null || !name.trim() || name.trim() === g.name) return;
+    try {
+      await adminFetch(`/api/admin/groups/${g.id}`, {
+        method: "PATCH",
+        body: { name: name.trim() },
+      });
+      setError(null);
+      await loadGames();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rename failed.");
+    }
+  };
+
+  const deleteGroup = async (g: GameGroup, count: number) => {
+    if (
+      !confirm(
+        `Remove the "${g.name}" group?` +
+          (count > 0
+            ? ` Its ${count} game${count === 1 ? "" : "s"} won't be deleted — they just move back to Ungrouped.`
+            : " It has no games in it.")
+      )
+    )
+      return;
+    try {
+      await adminFetch(`/api/admin/groups/${g.id}`, { method: "DELETE" });
+      setError(null);
+      await loadGames();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not remove the group.");
+    }
+  };
+
+  const moveGame = async (gameId: string, groupId: string) => {
+    // optimistic — the select feels instant, the server settles it
+    setGames((gs) =>
+      gs.map((g) => (g.id === gameId ? { ...g, group_id: groupId || null } : g))
+    );
+    try {
+      await adminFetch(`/api/admin/games/${gameId}`, {
+        method: "PATCH",
+        body: { group_id: groupId || null },
+      });
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not move the game.");
+      await loadGames();
+    }
+  };
+
   if (authed === false) return <PasscodeGate onSuccess={loadGames} />;
+
+  const grouped = groups.map((g) => ({
+    group: g,
+    items: games.filter((game) => game.group_id === g.id),
+  }));
+  const ungrouped = games.filter(
+    (game) => !game.group_id || !groups.some((g) => g.id === game.group_id)
+  );
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -108,17 +197,76 @@ export default function ConsolePage() {
         </div>
       </header>
 
-      <form onSubmit={create} className="card mb-6 flex items-center gap-3 p-4">
+      <form onSubmit={create} className="card mb-3 flex flex-wrap items-center gap-3 p-4">
         <input
-          className="input"
+          className="input min-w-48 flex-1"
           placeholder="New game title (e.g. National Purchasing Meeting 2026)"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
         />
+        {groups.length > 0 && (
+          <select
+            className="input !w-auto"
+            value={newGroupId}
+            onChange={(e) => setNewGroupId(e.target.value)}
+            aria-label="Group for the new game"
+          >
+            <option value="">No group</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button className="btn btn-primary" disabled={creating}>
           {creating ? "Creating…" : "Create game"}
         </button>
       </form>
+
+      {/* Group management — flat groups, purely organizational */}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        {addingGroup ? (
+          <form onSubmit={addGroup} className="flex flex-1 items-center gap-2">
+            <input
+              className="input !w-56"
+              placeholder="Group name (e.g. Atlanta)"
+              value={groupName}
+              maxLength={60}
+              autoFocus
+              onChange={(e) => setGroupName(e.target.value)}
+            />
+            <button
+              className="btn btn-primary !px-3 !py-1.5 text-xs"
+              disabled={groupBusy || !groupName.trim()}
+            >
+              {groupBusy ? "Adding…" : "Add group"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost !px-3 !py-1.5 text-xs"
+              onClick={() => {
+                setAddingGroup(false);
+                setGroupName("");
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <button
+            className="btn btn-ghost !px-3 !py-1.5 text-xs"
+            onClick={() => setAddingGroup(true)}
+          >
+            ＋ New group
+          </button>
+        )}
+        {groups.length === 0 && !addingGroup && (
+          <span className="text-xs text-steel-500">
+            Groups organize games by location — Atlanta, Nashville, Corporate…
+          </span>
+        )}
+      </div>
 
       {error && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -128,53 +276,62 @@ export default function ConsolePage() {
 
       {loading && games.length === 0 ? (
         <Spinner label="Loading games…" />
-      ) : games.length === 0 ? (
+      ) : games.length === 0 && groups.length === 0 ? (
         <div className="card p-8 text-center text-steel-600">
           No games yet — create your first one above.
         </div>
+      ) : groups.length === 0 ? (
+        <GameList games={games} groups={groups} onMove={moveGame} />
       ) : (
-        <ul className="space-y-3">
-          {games.map((g) => (
-            <li key={g.id} className="card p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <Link
-                    href={`/console/${g.id}`}
-                    className="block truncate text-lg font-bold text-navy-900 hover:underline"
-                  >
-                    {g.title}
-                  </Link>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-steel-600">
-                    <span className="chip bg-steel-100 font-mono text-navy-800">
-                      {g.code}
-                    </span>
-                    <StatusPill status={g.status} />
-                    <span>
-                      {g.question_count} question{g.question_count === 1 ? "" : "s"}
-                    </span>
-                    <span>·</span>
-                    <span>
-                      {g.participant_count} player{g.participant_count === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Link href={`/console/${g.id}`} className="btn btn-primary">
-                    Manage
-                  </Link>
-                  <a
-                    href={`/display/${g.code}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-ghost"
-                  >
-                    Big screen ↗
-                  </a>
-                </div>
+        <div className="space-y-8">
+          {grouped.map(({ group, items }) => (
+            <section key={group.id}>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="text-sm font-extrabold uppercase tracking-wide text-navy-800">
+                  {group.name}
+                </h2>
+                <span className="text-xs font-semibold text-steel-500">
+                  {items.length} game{items.length === 1 ? "" : "s"}
+                </span>
+                <button
+                  className="px-1 text-xs text-steel-400 hover:text-navy-800"
+                  title={`Rename ${group.name}`}
+                  onClick={() => renameGroup(group)}
+                >
+                  ✎
+                </button>
+                <button
+                  className="px-1 text-xs text-steel-400 hover:text-red-600"
+                  title={`Remove ${group.name} (games move to Ungrouped)`}
+                  onClick={() => deleteGroup(group, items.length)}
+                >
+                  ✕
+                </button>
               </div>
-            </li>
+              {items.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-steel-300 px-4 py-3 text-sm text-steel-500">
+                  No games in this group yet.
+                </div>
+              ) : (
+                <GameList games={items} groups={groups} onMove={moveGame} />
+              )}
+            </section>
           ))}
-        </ul>
+
+          {ungrouped.length > 0 && (
+            <section>
+              <div className="mb-2 flex items-center gap-2">
+                <h2 className="text-sm font-extrabold uppercase tracking-wide text-steel-500">
+                  Ungrouped
+                </h2>
+                <span className="text-xs font-semibold text-steel-500">
+                  {ungrouped.length} game{ungrouped.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <GameList games={ungrouped} groups={groups} onMove={moveGame} />
+            </section>
+          )}
+        </div>
       )}
 
       {deletedGames.length > 0 && (
@@ -209,6 +366,82 @@ export default function ConsolePage() {
         </section>
       )}
     </main>
+  );
+}
+
+function GameList({
+  games,
+  groups,
+  onMove,
+}: {
+  games: GameListItem[];
+  groups: GameGroup[];
+  onMove: (gameId: string, groupId: string) => void;
+}) {
+  return (
+    <ul className="space-y-3">
+      {games.map((g) => (
+        <li key={g.id} className="card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <Link
+                href={`/console/${g.id}`}
+                className="block truncate text-lg font-bold text-navy-900 hover:underline"
+              >
+                {g.title}
+              </Link>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-steel-600">
+                <span className="chip bg-steel-100 font-mono text-navy-800">
+                  {g.code}
+                </span>
+                <StatusPill status={g.status} />
+                {g.play_mode === "live" && (
+                  <span className="chip border border-steel-300 bg-white text-navy-800">
+                    ⚡ Live
+                  </span>
+                )}
+                <span>
+                  {g.question_count} question{g.question_count === 1 ? "" : "s"}
+                </span>
+                <span>·</span>
+                <span>
+                  {g.participant_count} player{g.participant_count === 1 ? "" : "s"}
+                </span>
+                {groups.length > 0 && (
+                  <select
+                    className="rounded-lg border border-steel-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-steel-600"
+                    value={g.group_id ?? ""}
+                    onChange={(e) => onMove(g.id, e.target.value)}
+                    aria-label={`Group for ${g.title}`}
+                    title="Move to a group"
+                  >
+                    <option value="">Ungrouped</option>
+                    {groups.map((grp) => (
+                      <option key={grp.id} value={grp.id}>
+                        {grp.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link href={`/console/${g.id}`} className="btn btn-primary">
+                Manage
+              </Link>
+              <a
+                href={`/display/${g.code}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost"
+              >
+                Big screen ↗
+              </a>
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

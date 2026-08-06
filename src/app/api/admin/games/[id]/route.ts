@@ -106,6 +106,8 @@ export async function PATCH(req: Request, { params }: Params) {
     | {
         title: string;
         status: GameStatus;
+        play_mode: "self" | "live";
+        group_id: string | null;
         current_index: number;
         reveal: boolean;
         deleted_at: string | null;
@@ -125,6 +127,8 @@ export async function PATCH(req: Request, { params }: Params) {
 
   let title = existing.title;
   let status = existing.status;
+  let play_mode = existing.play_mode;
+  let group_id = existing.group_id;
   let current_index = existing.current_index;
   let reveal = existing.reveal;
 
@@ -133,11 +137,34 @@ export async function PATCH(req: Request, { params }: Params) {
       return jsonError(400, "Title cannot be empty.");
     title = body.title.trim();
   }
+  if (body.play_mode !== undefined) {
+    if (body.play_mode !== "self" && body.play_mode !== "live")
+      return jsonError(400, "Invalid play style.");
+    if (body.play_mode !== existing.play_mode && existing.status !== "draft")
+      return jsonError(400, "The play style can only be changed in Setup mode.");
+    play_mode = body.play_mode;
+  }
+  if (body.group_id !== undefined) {
+    if (body.group_id === null || body.group_id === "") {
+      group_id = null;
+    } else if (typeof body.group_id === "string" && UUID_RE.test(body.group_id)) {
+      const found = await sql`select id from groups where id = ${body.group_id}`;
+      if (found.length === 0) return jsonError(400, "Unknown group.");
+      group_id = body.group_id;
+    } else {
+      return jsonError(400, "Unknown group.");
+    }
+  }
   if (body.status !== undefined) {
     if (!STATUSES.includes(body.status)) return jsonError(400, "Invalid status.");
     status = body.status;
     // Entering results mode starts the walkthrough at question 1, unrevealed.
     if (status === "results" && existing.status !== "results") {
+      current_index = 0;
+      reveal = false;
+    }
+    // Opening a game from Setup starts live play at question 1, unrevealed.
+    if (status === "open" && existing.status === "draft") {
       current_index = 0;
       reveal = false;
     }
@@ -151,7 +178,8 @@ export async function PATCH(req: Request, { params }: Params) {
 
   const rows = await sql`
     update games
-    set title = ${title}, status = ${status},
+    set title = ${title}, status = ${status}, play_mode = ${play_mode},
+        group_id = ${group_id},
         current_index = ${current_index}, reveal = ${reveal}
     where id = ${id}
     returning *`;

@@ -15,15 +15,29 @@ export async function GET(_req: Request, { params }: Params) {
   const sql = db();
 
   const games = await sql`
-    select id, status from games
+    select id, status, play_mode, current_index, reveal from games
     where code = ${code.toUpperCase()} and deleted_at is null`;
-  const game = games[0] as { id: string; status: string } | undefined;
+  const game = games[0] as
+    | {
+        id: string;
+        status: string;
+        play_mode: "self" | "live";
+        current_index: number;
+        reveal: boolean;
+      }
+    | undefined;
   if (!game) return jsonError(404, "Game not found.");
-  if (game.status !== "results") {
+
+  // A live game mid-run may serve the CURRENT question's result — but only
+  // while the host has it revealed. Everything else stays hidden until
+  // Results mode, exactly like a self-paced game.
+  const liveReveal =
+    game.status === "open" && game.play_mode === "live" && game.reveal;
+  if (game.status !== "results" && !liveReveal) {
     return jsonError(403, "Results are not available until the game is in Results mode.");
   }
 
-  const [questions, countRows] = await Promise.all([
+  const [allQuestions, countRows] = await Promise.all([
     sql`select id, position, options, correct_index
         from questions where game_id = ${game.id} and deleted_at is null
         order by position asc, created_at asc`,
@@ -33,6 +47,14 @@ export async function GET(_req: Request, { params }: Params) {
         where a.game_id = ${game.id}
         group by a.question_id, a.choice_index`,
   ]);
+
+  // Mid-game live reveal → trim the payload to just the question on screen.
+  const questions = liveReveal
+    ? allQuestions.slice(
+        Math.min(game.current_index, Math.max(allQuestions.length - 1, 0)),
+        Math.min(game.current_index, Math.max(allQuestions.length - 1, 0)) + 1
+      )
+    : allQuestions;
 
   const results = (questions as {
     id: string;

@@ -30,13 +30,17 @@ export async function GET() {
       const cols = (await sql`
         select table_name, column_name
         from information_schema.columns
-        where (table_name = 'games' and column_name = 'deleted_at')
+        where (table_name = 'games' and column_name in ('deleted_at', 'play_mode', 'group_id'))
            or (table_name = 'questions' and column_name in ('updated_at', 'deleted_at'))
            or (table_name = 'participants' and column_name in ('first_name', 'last_name'))
+           or (table_name = 'groups' and column_name = 'id')
       `) as { table_name: string; column_name: string }[];
       const have = new Set(cols.map((c) => `${c.table_name}.${c.column_name}`));
       const needed = [
         "games.deleted_at",
+        "games.play_mode",
+        "games.group_id",
+        "groups.id",
         "questions.updated_at",
         "questions.deleted_at",
         "participants.first_name",

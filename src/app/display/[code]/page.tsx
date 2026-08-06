@@ -26,18 +26,21 @@ export default function DisplayPage() {
     if (Number.isFinite(raw) && raw >= 4 && raw <= 120) setSecondsPerQuestion(raw);
   }, []);
 
-  /* ── cycling through questions while OPEN ─────────────────── */
+  const live = game?.play_mode === "live";
+
+  /* ── cycling through questions while OPEN (self-paced only —
+        a live game is driven by the host, one question at a time) ── */
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
-    if (game?.status !== "open" || paused || questions.length < 2) return;
+    if (game?.status !== "open" || live || paused || questions.length < 2) return;
     const t = setTimeout(
       () => setIdx((i) => (i + 1) % questions.length),
       secondsPerQuestion * 1000
     );
     return () => clearTimeout(t);
-  }, [game?.status, paused, questions.length, idx, secondsPerQuestion]);
+  }, [game?.status, live, paused, questions.length, idx, secondsPerQuestion]);
 
   useEffect(() => {
     if (idx >= questions.length) setIdx(0);
@@ -64,10 +67,12 @@ export default function DisplayPage() {
     };
   }, [game?.status, game?.id, code, game]);
 
-  /* ── results payload once the game enters Results mode ────── */
+  /* ── results payload: full set in Results mode, or just the current
+        question while a live game has its answer revealed ─────── */
   const [results, setResults] = useState<QuestionResult[] | null>(null);
+  const liveReveal = Boolean(live && game?.status === "open" && game?.reveal);
   useEffect(() => {
-    if (game?.status !== "results") {
+    if (game?.status !== "results" && !liveReveal) {
       setResults(null);
       return;
     }
@@ -83,7 +88,7 @@ export default function DisplayPage() {
     return () => {
       stop = true;
     };
-  }, [game?.status, code]);
+  }, [game?.status, liveReveal, game?.current_index, code]);
 
   /* ── final standings once the game enters Leaderboard mode ── */
   const [board, setBoard] = useState<LeaderboardPayload | null>(null);
@@ -166,7 +171,15 @@ export default function DisplayPage() {
         return;
       }
       if (!game) return;
-      if (game.status === "open") {
+      if (game.status === "open" && game.play_mode === "live") {
+        // Host-paced: the arrow keys drive the real game state (if this
+        // browser has the console passcode), not a local slideshow.
+        if (e.key === "ArrowRight" && game.current_index < questions.length - 1)
+          driveResults({ current_index: game.current_index + 1, reveal: false });
+        if (e.key === "ArrowLeft" && game.current_index > 0)
+          driveResults({ current_index: game.current_index - 1, reveal: false });
+        if (e.key === "r" || e.key === "R") driveResults({ reveal: !game.reveal });
+      } else if (game.status === "open") {
         if (e.key === "ArrowRight")
           setIdx((i) => (questions.length ? (i + 1) % questions.length : 0));
         if (e.key === "ArrowLeft")
@@ -238,7 +251,50 @@ export default function DisplayPage() {
           <DraftSplash title={game.title} playUrl={playUrl} code={game.code} />
         )}
 
+        {/* Live (host-paced): one question at a time, bars only at reveal */}
         {game.status === "open" &&
+          live &&
+          (questions.length > 0 ? (
+            game.reveal && results ? (
+              <ResultsSlide
+                questions={questions}
+                results={results}
+                currentIndex={0}
+                reveal
+                chipLabel={`Question ${Math.min(game.current_index, questions.length - 1) + 1} of ${questions.length}`}
+              />
+            ) : (
+              (() => {
+                const liveIdx = Math.min(game.current_index, questions.length - 1);
+                const liveQ = questions[liveIdx];
+                return (
+                  <>
+                    <section className="flex min-w-0 flex-1 flex-col justify-center">
+                      <QuestionSlide
+                        key={liveQ.id}
+                        index={liveIdx}
+                        total={questions.length}
+                        prompt={liveQ.prompt}
+                        options={liveQ.options}
+                      />
+                      <p className="mt-10 text-center text-lg text-steel-400">
+                        Answer on your phone — first tap counts
+                      </p>
+                    </section>
+                    <aside className="hidden w-[320px] shrink-0 flex-col items-center justify-center gap-6 lg:flex">
+                      <QrPanel url={playUrl} code={game.code} size={210} />
+                    </aside>
+                  </>
+                );
+              })()
+            )
+          ) : (
+            <CenterNote>No questions loaded yet — add some in the console.</CenterNote>
+          ))}
+
+        {/* Self-paced: cycle through everything while people answer */}
+        {game.status === "open" &&
+          !live &&
           (q ? (
             <>
               <section className="flex min-w-0 flex-1 flex-col justify-center">
@@ -310,7 +366,11 @@ export default function DisplayPage() {
       >
         <span className="text-xs text-steel-500">
           {game.status === "open" &&
-            "← → skip · Space pause · F full screen"}
+            (live
+              ? canDrive
+                ? "← → question · R reveal · F full screen"
+                : "Drive from the question console · F full screen"
+              : "← → skip · Space pause · F full screen")}
           {game.status === "results" &&
             (canDrive
               ? "← → question · R reveal · F full screen"
@@ -449,11 +509,14 @@ function ResultsSlide({
   results,
   currentIndex,
   reveal,
+  chipLabel,
 }: {
   questions: { id: string; prompt: string; options: string[] }[];
   results: QuestionResult[] | null;
   currentIndex: number;
   reveal: boolean;
+  /** Overrides the chip text (used by live mode's single-question payload). */
+  chipLabel?: string;
 }) {
   if (!results) return <CenterNote>Tallying the room…</CenterNote>;
   if (results.length === 0) return <CenterNote>No questions to show.</CenterNote>;
@@ -474,7 +537,7 @@ function ResultsSlide({
       <div className="slide-in">
         <div className="mb-6 flex items-center gap-4">
           <span className="rounded-full bg-white/10 px-5 py-1.5 text-lg font-bold text-steel-200">
-            Results — Question {i + 1} of {results.length}
+            {chipLabel ?? `Results — Question ${i + 1} of ${results.length}`}
           </span>
           <span className="text-lg text-steel-400 tabular-nums">
             {r.total} answer{r.total === 1 ? "" : "s"}

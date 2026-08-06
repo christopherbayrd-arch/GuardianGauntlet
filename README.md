@@ -8,6 +8,15 @@ their phones at their own pace. When you're ready, you lock submissions with
 one click and walk through the results question by question — revealing the
 correct answer only when you say so.
 
+Every game has one of two **play styles**, chosen in Setup:
+
+- **Self-paced** (the default, described above) — open the game for a stretch
+  of time and let everyone answer all the questions in any order.
+- **⚡ Live (host-paced)** — a game-show round. The big screen shows one
+  question at a time; the room answers on their phones (first tap counts, no
+  changes); you hit **Reveal** to show the % and vote counts for each answer
+  with the correct one in gold; then **Next** to move on.
+
 **Stack:** Next.js (hosted free on Vercel, code on GitHub) + Neon serverless
 Postgres (free). No other services, no accounts for attendees — players just
 type their first and last name when they scan in.
@@ -24,10 +33,19 @@ type their first and last name when they scan in.
 | **4 · Results** | One question at a time with vote bars; correct answer highlights when you hit **Reveal** | See their own score & the room's votes |
 | **5 · Leaderboard** | Podium for the top 3 + ranks 4–10 | See their own rank + the top 10 |
 
+In a ⚡ live game, mode **2 · Open** works differently: the big screen shows
+only the question you're on (no bars until you reveal), phones can only answer
+that question, and revealing closes it to new taps. Drive it from the **Live
+question control** in the console — or with `←`/`→`/`R` right on the display
+if you've unlocked the console in that browser. A typical live flow skips
+Results entirely: Setup → Open (run the questions) → Lock → Leaderboard.
+
 Correct answers are never sent to phones or the big screen until Results mode —
-not even to someone poking around in browser dev tools. Scores and standings
-stay hidden until then too; the console shows you a private leaderboard preview
-from the moment you lock, so you can prep the prize handoff.
+not even to someone poking around in browser dev tools. (In a live game, the
+one question you've revealed is the only exception, while it's on screen.)
+Scores and standings stay hidden until then too; the console shows you a
+private leaderboard preview from the moment you lock, so you can prep the
+prize handoff.
 
 ---
 
@@ -133,6 +151,10 @@ If it's not a git repo yet, run `git init -b main && git add -A && git commit -m
    rejoined, leaving a half-finished ghost entry)? Hit the **✕** next to the
    stale row to remove it — that player's answers go with it — before you flip
    the room to Leaderboard.
+9. Afterwards, hit **⬇ Export PDF** (top right of the game console, available
+   from Lock onward) to download a branded results report — the final
+   standings plus every question's full answer breakdown — ready to email
+   out after the meeting.
 
 **Handy keys on the big screen:** `←`/`→` skip · `Space` pause cycling ·
 `F` full screen. If you've unlocked the console in the *same browser*, `←`/`→`
@@ -140,6 +162,13 @@ and `R` also drive the results walkthrough right from the display.
 
 **Pacing:** questions cycle every 12 seconds. Add `?secs=20` to the display URL
 to change it (4–120).
+
+**Running it ⚡ live instead?** Pick **Live** as the play style in Setup, then
+on the day: **Open** → for each question, let the room tap (the live control
+shows *N of M answered this question*), hit **★ Reveal** to put the votes and
+the correct answer on screen, talk it through, **Next →**. After the last
+reveal: **Lock** → **5 · Leaderboard**. Auto-cycling and pacing don't apply —
+you're the timer.
 
 ---
 
@@ -176,7 +205,16 @@ npm run dev                  # http://localhost:3000
   `ADMIN_PASSCODE` → redeploy.
 - Players join with their first and last name (that's what the leaderboard
   shows); no accounts or sign-ins. One answer per device per question — people
-  can change answers until you lock.
+  can change answers until you lock (self-paced games; in ⚡ live games the
+  first tap counts and a revealed question stops accepting answers).
+- **Groups keep multi-location use tidy.** On the console home page, create
+  groups (Atlanta, Nashville, Corporate…), file games into them with the
+  little dropdown on each game card, and rename (✎) or remove (✕) a group
+  anytime. Groups are purely organizational — no separate passcodes — and
+  removing one never deletes its games; they just move back to Ungrouped.
+- **A game's play style can only be changed in Setup** — flipping between
+  self-paced and live mid-game would scramble the room, so the toggle locks
+  once you open.
 - A name typed once is remembered on that device for that game, so a page
   refresh never asks again or double-counts anyone. Someone who clears their
   browser data or switches devices mid-game starts fresh as a new player —
@@ -184,8 +222,10 @@ npm run dev                  # http://localhost:3000
   leaderboard preview. (Typing someone's name never takes over their entry —
   that would let people hijack the leader.)
 - **Upgrading an existing database:** `db/schema.sql` is safe to re-run — after
-  pulling new code, paste it into Neon's SQL Editor again and Run. It adds the
-  name columns and the Leaderboard mode without touching stored answers.
+  pulling new code, paste it into Neon's SQL Editor again and Run. It adds
+  newer columns and tables (names, Leaderboard mode, groups, play styles)
+  without touching stored answers. `/api/health` tells you if this step is
+  still pending.
 
 ## Project map
 

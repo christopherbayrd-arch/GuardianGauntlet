@@ -20,6 +20,27 @@ alter table games drop constraint if exists games_status_check;
 alter table games add constraint games_status_check
   check (status in ('draft', 'open', 'locked', 'results', 'leaderboard'));
 
+-- ── Groups: organize games by location/team (organization only — no
+--    per-group passcode). Deleting a group never deletes its games; they
+--    just move back to Ungrouped (on delete set null).
+create table if not exists groups (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists groups_name_key on groups (lower(name));
+
+-- ── Play style, chosen per game (upgrade path — safe to re-run):
+--    'self' = everyone answers at their own pace while the game is Open
+--    'live' = host-paced: phones answer only the question on the big screen,
+--             the host reveals, then advances
+alter table games add column if not exists group_id uuid references groups (id) on delete set null;
+alter table games add column if not exists play_mode text not null default 'self';
+alter table games drop constraint if exists games_play_mode_check;
+alter table games add constraint games_play_mode_check
+  check (play_mode in ('self', 'live'));
+create index if not exists games_group_idx on games (group_id);
+
 create table if not exists questions (
   id            uuid primary key default gen_random_uuid(),
   game_id       uuid not null references games (id) on delete cascade,

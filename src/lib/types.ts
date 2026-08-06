@@ -1,14 +1,36 @@
 export type GameStatus = "draft" | "open" | "locked" | "results" | "leaderboard";
 
+/**
+ * How a game is played while it is Open:
+ * - "self": everyone answers at their own pace (the original mode)
+ * - "live": host-paced — phones can only answer the question currently on
+ *   the big screen; the host reveals, then advances
+ */
+export type PlayMode = "self" | "live";
+
 export interface Game {
   id: string;
   code: string;
   title: string;
   status: GameStatus;
+  play_mode: PlayMode;
+  group_id: string | null;
   current_index: number;
   reveal: boolean;
   created_at: string;
 }
+
+/** A flat organizational bucket for games (e.g. a company location). */
+export interface GameGroup {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export const PLAY_MODE_LABELS: Record<PlayMode, string> = {
+  self: "Self-paced",
+  live: "Live · host-paced",
+};
 
 export interface PublicQuestion {
   id: string;

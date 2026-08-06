@@ -35,9 +35,17 @@ export async function POST(req: Request, { params }: Params) {
   const sql = db();
 
   const games = await sql`
-    select id, status from games
+    select id, status, play_mode, current_index, reveal from games
     where code = ${code.toUpperCase()} and deleted_at is null`;
-  const game = games[0] as { id: string; status: string } | undefined;
+  const game = games[0] as
+    | {
+        id: string;
+        status: string;
+        play_mode: "self" | "live";
+        current_index: number;
+        reveal: boolean;
+      }
+    | undefined;
   if (!game) return jsonError(404, "Game not found.");
   if (game.status !== "open") {
     return jsonError(409, "Answers are locked.");
@@ -52,6 +60,53 @@ export async function POST(req: Request, { params }: Params) {
   if (choice_index >= question.option_count) {
     return jsonError(400, "Invalid option.");
   }
+
+  /* ── Live (host-paced) games play by stricter rules ────────── */
+  if (game.play_mode === "live") {
+    const ordered = (await sql`
+      select id from questions
+      where game_id = ${game.id} and deleted_at is null
+      order by position asc, created_at asc`) as { id: string }[];
+    const currentId = ordered[game.current_index]?.id;
+    if (question_id !== currentId) {
+      return jsonError(409, "That question isn't open right now — follow the big screen.");
+    }
+    if (game.reveal) {
+      return jsonError(409, "The answer has been revealed — this question is closed.");
+    }
+
+    // Make sure the participant exists (e.g. cleared storage mid-game).
+    await sql`
+      insert into participants (id, game_id)
+      values (${participant_id}, ${game.id})
+      on conflict (id) do nothing`;
+
+    // First tap counts (no changes), and the write re-checks — inside one
+    // statement — that the game is still open, on this question, unrevealed.
+    const inserted = await sql`
+      insert into answers (game_id, question_id, participant_id, choice_index)
+      select ${game.id}, ${question_id}, ${participant_id}, ${choice_index}
+      where exists (
+        select 1 from games
+        where id = ${game.id} and status = 'open'
+          and current_index = ${game.current_index} and reveal = false
+      )
+      on conflict (question_id, participant_id) do nothing
+      returning id`;
+
+    if (inserted.length === 0) {
+      const already = await sql`
+        select 1 from answers
+        where question_id = ${question_id} and participant_id = ${participant_id}`;
+      if (already.length > 0) {
+        return jsonError(409, "Your answer is already in — first tap counts.");
+      }
+      return jsonError(409, "This question just closed.");
+    }
+    return Response.json({ ok: true });
+  }
+
+  /* ── Self-paced games: answer (or change) anything while open ── */
 
   // Make sure the participant exists (e.g. cleared storage mid-game).
   await sql`

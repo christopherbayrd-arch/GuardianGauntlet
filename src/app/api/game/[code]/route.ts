@@ -11,7 +11,7 @@ export async function GET(_req: Request, { params }: Params) {
   const sql = db();
 
   const games = await sql`
-    select id, code, title, status, current_index, reveal, created_at
+    select id, code, title, status, play_mode, current_index, reveal, created_at
     from games where code = ${code.toUpperCase()} and deleted_at is null`;
   const game = games[0];
   if (!game) return jsonError(404, "Game not found.");

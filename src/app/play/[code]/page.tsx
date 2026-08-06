@@ -65,13 +65,47 @@ export default function PlayPage() {
     );
   }, [game?.id, participant, code]);
 
-  /* start on the first unanswered question when the game opens */
+  const live = game?.play_mode === "live";
+
+  /* start on the first unanswered question when the game opens
+     (self-paced only — live games follow the host's current question) */
   useEffect(() => {
-    if (jumpedRef.current || game?.status !== "open" || questions.length === 0) return;
+    if (
+      live ||
+      jumpedRef.current ||
+      game?.status !== "open" ||
+      questions.length === 0
+    )
+      return;
     jumpedRef.current = true;
     const first = questions.findIndex((q) => answers[q.id] === undefined);
     if (first > 0) setIdx(first);
-  }, [game?.status, questions, answers]);
+  }, [live, game?.status, questions, answers]);
+
+  /* live mode: when the host reveals, fetch the current question's result */
+  const liveReveal = Boolean(live && game?.status === "open" && game?.reveal);
+  const [liveResult, setLiveResult] = useState<QuestionResult | null>(null);
+  useEffect(() => {
+    if (!liveReveal) {
+      setLiveResult(null);
+      return;
+    }
+    let stop = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/game/${code}/results`, { cache: "no-store" });
+        if (res.ok && !stop) {
+          const data = (await res.json()) as { results: QuestionResult[] };
+          setLiveResult(data.results[0] ?? null);
+        }
+      } catch {
+        /* transient */
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [liveReveal, game?.current_index, code]);
 
   /* results once the host reveals them */
   useEffect(() => {
@@ -121,6 +155,10 @@ export default function PlayPage() {
   const choose = useCallback(
     async (questionId: string, choice: number) => {
       if (!game || game.status !== "open" || !participant) return;
+      const isLive = game.play_mode === "live";
+      // Live rule: first tap counts — no changes once an answer is in
+      // (or is mid-flight; the guard covers the optimistic state too).
+      if (isLive && answers[questionId] !== undefined) return;
       setBanner(null);
       setAnswers((a) => ({ ...a, [questionId]: choice }));
       setSaveState((s) => ({ ...s, [questionId]: "saving" }));
@@ -132,6 +170,7 @@ export default function PlayPage() {
         });
         setSaveState((s) => ({ ...s, [questionId]: "saved" }));
         setLocalAnswer(game.id, questionId, choice);
+        if (isLive) return; // stay put — the host moves everyone on
         // hop to the next unanswered question, if there is one
         const local = { ...getLocalAnswers(game.id), [questionId]: choice };
         const n = questions.length;
@@ -144,11 +183,26 @@ export default function PlayPage() {
           }
         }
       } catch (e) {
-        setSaveState((s) => ({ ...s, [questionId]: "error" }));
+        if (isLive) {
+          // The tap didn't count (question closed / already answered) —
+          // don't show a locked-in choice that never reached the server.
+          setAnswers((a) => {
+            const next = { ...a };
+            delete next[questionId];
+            return next;
+          });
+          setSaveState((s) => {
+            const next = { ...s };
+            delete next[questionId];
+            return next;
+          });
+        } else {
+          setSaveState((s) => ({ ...s, [questionId]: "error" }));
+        }
         setBanner(e instanceof Error ? e.message : "Could not save your answer.");
       }
     },
-    [game, participant, code, questions]
+    [game, participant, code, questions, answers]
   );
 
   /* ── render states ────────────────────────────────────────── */
@@ -215,7 +269,113 @@ export default function PlayPage() {
         </div>
       )}
 
-      {game.status === "open" && q && (
+      {/* Live (host-paced): one question at a time, first tap counts */}
+      {game.status === "open" &&
+        live &&
+        (questions.length === 0 ? (
+          <div className="card p-8 text-center">
+            <div className="pulse-dot mx-auto mb-4 h-3 w-3 rounded-full bg-gold-500" />
+            <p className="text-sm text-steel-600">Waiting for the first question…</p>
+          </div>
+        ) : (
+          (() => {
+            const liveIdx = Math.min(game.current_index, questions.length - 1);
+            const lq = questions[liveIdx];
+            const mine = answers[lq.id];
+            const answered = mine !== undefined;
+            const revealNow =
+              liveReveal && liveResult && liveResult.question_id === lq.id;
+            return (
+              <>
+                {/* live progress strip */}
+                <div className="card mb-3 p-4">
+                  <div className="flex items-center justify-between text-xs font-semibold text-steel-600">
+                    <span>
+                      Question {liveIdx + 1} of {questions.length}
+                    </span>
+                    <span>⚡ Live — follow the big screen</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-steel-100">
+                    <div
+                      className="h-full rounded-full bg-steel-500 transition-all duration-500"
+                      style={{
+                        width: `${((liveIdx + (game.reveal ? 1 : 0)) / questions.length) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="card p-5" key={lq.id}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wide text-steel-500">
+                      Question {liveIdx + 1} of {questions.length}
+                    </span>
+                    <SaveBadge state={saveState[lq.id]} answered={answered} />
+                  </div>
+                  <h2 className="text-lg font-extrabold leading-snug text-navy-900">
+                    {lq.prompt}
+                  </h2>
+
+                  {revealNow ? (
+                    <LiveRevealList question={lq} result={liveResult!} mine={mine} />
+                  ) : (
+                    <>
+                      <ul className="mt-4 space-y-2.5">
+                        {lq.options.map((opt, oi) => {
+                          const selected = mine === oi;
+                          return (
+                            <li key={oi}>
+                              <button
+                                onClick={() => choose(lq.id, oi)}
+                                disabled={answered}
+                                className={
+                                  "flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-colors " +
+                                  (selected
+                                    ? "border-navy-800 bg-navy-800 text-white"
+                                    : answered
+                                      ? "border-steel-100 bg-white text-navy-900 opacity-50"
+                                      : "border-steel-200 bg-white text-navy-900 active:bg-steel-50")
+                                }
+                              >
+                                <span
+                                  className={
+                                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-extrabold " +
+                                    (selected
+                                      ? "bg-gold-500 text-navy-950"
+                                      : "bg-steel-100 text-steel-700")
+                                  }
+                                >
+                                  {OPTION_LETTERS[oi]}
+                                </span>
+                                <span className="text-[15px] font-semibold leading-snug">
+                                  {opt}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <p className="mt-4 text-center text-sm font-medium text-steel-600">
+                        {answered ? (
+                          <>
+                            You&apos;re in!{" "}
+                            <span className="text-steel-500">
+                              Waiting for the reveal…
+                            </span>
+                          </>
+                        ) : (
+                          <>Tap your answer — first tap counts, no changes.</>
+                        )}
+                      </p>
+                    </>
+                  )}
+                </div>
+              </>
+            );
+          })()
+        ))}
+
+      {game.status === "open" && !live && q && (
         <>
           {/* progress */}
           <div className="card mb-3 p-4">
@@ -491,6 +651,100 @@ function SaveBadge({ state, answered }: { state?: SaveState; answered: boolean }
   if (answered)
     return <span className="text-xs font-semibold text-emerald-700">Saved ✓</span>;
   return null;
+}
+
+/**
+ * The phone's reveal state during a live game: the correct answer in gold,
+ * your pick marked, and the room's spread with % + vote counts.
+ */
+function LiveRevealList({
+  question,
+  result,
+  mine,
+}: {
+  question: { options: string[] };
+  result: QuestionResult;
+  mine: number | undefined;
+}) {
+  const gotIt = mine !== undefined && mine === result.correct_index;
+  const correctLetter = OPTION_LETTERS[result.correct_index];
+
+  return (
+    <>
+      <div
+        className={
+          "mt-3 rounded-xl px-4 py-2.5 text-center text-sm font-bold " +
+          (gotIt
+            ? "bg-emerald-100 text-emerald-800"
+            : "bg-steel-100 text-navy-800")
+        }
+      >
+        {gotIt
+          ? "You got it! 🎉"
+          : mine !== undefined
+            ? `Not this time — it was ${correctLetter}.`
+            : `No answer in — it was ${correctLetter}.`}
+      </div>
+      <ul className="mt-3 space-y-1.5">
+        {question.options.map((opt, oi) => {
+          const isCorrect = oi === result.correct_index;
+          const isMine = mine === oi;
+          const pct = result.total
+            ? Math.round(((result.counts[oi] ?? 0) / result.total) * 100)
+            : 0;
+          return (
+            <li
+              key={oi}
+              className={
+                "rounded-lg border px-3 py-2 text-sm " +
+                (isCorrect
+                  ? "border-gold-500 bg-gold-100"
+                  : isMine
+                    ? "border-steel-400 bg-steel-50"
+                    : "border-steel-100")
+              }
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 flex-1 font-medium text-navy-900">
+                  <b className="mr-1.5">{OPTION_LETTERS[oi]}</b>
+                  {opt}
+                </span>
+                <span className="shrink-0 text-xs font-bold tabular-nums text-steel-600">
+                  {result.counts[oi] ?? 0} · {pct}%
+                </span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
+                <div
+                  className={
+                    "h-full rounded-full " +
+                    (isCorrect ? "bg-gold-500" : "bg-steel-400")
+                  }
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              {(isCorrect || isMine) && (
+                <div className="mt-1 flex gap-2 text-[11px] font-bold">
+                  {isCorrect && (
+                    <span className="text-gold-600">✓ Correct answer</span>
+                  )}
+                  {isMine && (
+                    <span
+                      className={isCorrect ? "text-emerald-700" : "text-steel-600"}
+                    >
+                      {isCorrect ? "You got it!" : "Your pick"}
+                    </span>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-3 text-center text-xs font-medium text-steel-500">
+        Next question coming up on the big screen…
+      </p>
+    </>
+  );
 }
 
 function ResultsView({

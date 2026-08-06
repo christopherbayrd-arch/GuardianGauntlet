@@ -103,7 +103,11 @@ export default function GameConsolePage() {
   }, [load, router]);
 
   const patchGame = useCallback(
-    async (patch: Partial<Pick<Game, "title" | "status" | "current_index" | "reveal">>) => {
+    async (
+      patch: Partial<
+        Pick<Game, "title" | "status" | "current_index" | "reveal" | "play_mode" | "group_id">
+      >
+    ) => {
       setBusy(true);
       try {
         const d = await adminFetch<{ game: Game }>(`/api/admin/games/${gameId}`, {
@@ -344,6 +348,16 @@ export default function GameConsolePage() {
           {game.code}
         </span>
         <StatusPill status={game.status} />
+        <div className="ml-auto">
+          <ExportPdfButton
+            gameId={gameId}
+            ready={game.status !== "draft" && game.status !== "open"}
+            onError={(e) => {
+              if (!authFail(e))
+                setError(e instanceof Error ? e.message : "PDF export failed.");
+            }}
+          />
+        </div>
       </div>
 
       {error && (
@@ -354,12 +368,54 @@ export default function GameConsolePage() {
 
       {/* Game mode */}
       <section className="card mb-6 p-5">
-        <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-steel-600">
-          Game mode
-        </h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
+            Game mode
+          </h2>
+          <div className="flex items-center gap-1.5">
+            <span className="mr-1 text-xs font-bold uppercase tracking-wide text-steel-500">
+              Play style
+            </span>
+            {(
+              [
+                { mode: "self" as const, label: "Self-paced" },
+                { mode: "live" as const, label: "⚡ Live" },
+              ]
+            ).map(({ mode, label }) => {
+              const active = game.play_mode === mode;
+              const locked = game.status !== "draft";
+              return (
+                <button
+                  key={mode}
+                  disabled={busy || (locked && !active)}
+                  title={
+                    locked && !active
+                      ? "The play style can only be changed in Setup mode"
+                      : mode === "self"
+                        ? "Everyone answers at their own pace while the game is open"
+                        : "Host-paced: phones answer only the question on the big screen"
+                  }
+                  onClick={() => !active && patchGame({ play_mode: mode })}
+                  className={
+                    "rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors " +
+                    (active
+                      ? "border-navy-800 bg-navy-800 text-white"
+                      : "border-steel-200 bg-white text-steel-600 hover:border-steel-400")
+                  }
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
           {MODES.map((m) => {
             const active = game.status === m.status;
+            const desc =
+              m.status === "open" && game.play_mode === "live"
+                ? "Run it live — phones answer the question you're on."
+                : m.desc;
             return (
               <button
                 key={m.status}
@@ -379,17 +435,33 @@ export default function GameConsolePage() {
                     (active ? "text-steel-300" : "text-steel-600")
                   }
                 >
-                  {m.desc}
+                  {desc}
                 </div>
               </button>
             );
           })}
         </div>
-        {game.status === "open" && (
+        {game.status === "open" && game.play_mode === "self" && (
           <p className="mt-3 text-xs text-steel-600">
             Phones answer at their own pace. When you hit{" "}
             <span className="font-semibold">Lock</span>, the database rejects any
             further submissions instantly.
+          </p>
+        )}
+        {game.status === "open" && game.play_mode === "live" && (
+          <p className="mt-3 text-xs text-steel-600">
+            Live game underway — drive it from the{" "}
+            <span className="font-semibold">Live question control</span> below.
+            Phones can only answer the question on screen, and taps stop the
+            moment you reveal.
+          </p>
+        )}
+        {game.status === "draft" && game.play_mode === "live" && (
+          <p className="mt-3 text-xs text-steel-600">
+            ⚡ Live: when you hit <span className="font-semibold">Open</span>,
+            the big screen shows one question at a time. Everyone answers,
+            you reveal, then advance. First tap counts — answers can&apos;t be
+            changed.
           </p>
         )}
       </section>
@@ -473,6 +545,95 @@ export default function GameConsolePage() {
       </div>
 
       {/* Results walkthrough */}
+      {/* Live question control — the host's remote while a live game runs */}
+      {game.status === "open" && game.play_mode === "live" && (
+        <section className="card mb-6 border-2 border-gold-500 p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-steel-600">
+              ⚡ Live question control
+            </h2>
+            {current && (
+              <span className="text-xs font-semibold tabular-nums text-steel-600">
+                {answeredFor(current.id)} of {stats?.participants ?? 0} answered
+                this question
+              </span>
+            )}
+          </div>
+
+          {questions.length === 0 ? (
+            <p className="text-sm text-steel-600">No questions yet.</p>
+          ) : (
+            <>
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <button
+                  className="btn btn-ghost"
+                  disabled={busy || game.current_index <= 0}
+                  onClick={() =>
+                    patchGame({ current_index: game.current_index - 1, reveal: false })
+                  }
+                >
+                  ← Prev
+                </button>
+                <select
+                  className="input !w-auto"
+                  value={Math.min(game.current_index, questions.length - 1)}
+                  onChange={(e) =>
+                    patchGame({ current_index: Number(e.target.value), reveal: false })
+                  }
+                >
+                  {questions.map((q, i) => (
+                    <option key={q.id} value={i}>
+                      Q{i + 1} — {q.prompt.slice(0, 40)}
+                      {q.prompt.length > 40 ? "…" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="btn btn-ghost"
+                  disabled={busy || game.current_index >= questions.length - 1}
+                  onClick={() =>
+                    patchGame({ current_index: game.current_index + 1, reveal: false })
+                  }
+                >
+                  Next →
+                </button>
+                <button
+                  className={game.reveal ? "btn btn-ghost" : "btn btn-gold"}
+                  disabled={busy}
+                  onClick={() => patchGame({ reveal: !game.reveal })}
+                >
+                  {game.reveal ? "Hide correct answer" : "★ Reveal correct answer"}
+                </button>
+              </div>
+
+              {current && (
+                <WalkthroughPreview
+                  question={current}
+                  dist={distFor(current.id)}
+                  reveal={game.reveal}
+                  index={Math.min(game.current_index, questions.length - 1)}
+                  total={questions.length}
+                />
+              )}
+              <p className="mt-3 text-xs text-steel-600">
+                Phones and the big screen follow within a couple of seconds.
+                While revealed, a question stops accepting taps — and first tap
+                counts, so there are no answer changes in live play.
+                {game.current_index >= questions.length - 1 && game.reveal && (
+                  <>
+                    {" "}
+                    <span className="font-semibold text-navy-800">
+                      That was the last question — Lock, then Leaderboard to
+                      crown the winners.
+                    </span>
+                  </>
+                )}
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
       {(game.status === "results" || game.status === "locked") && (
         <section className="card mb-6 border-2 border-gold-500 p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -988,6 +1149,51 @@ function DeleteGameModal({
 }
 
 /* ────────────────────────── helpers ────────────────────────── */
+
+/**
+ * Downloads the post-game report: final standings plus every question's
+ * answer breakdown, as a branded PDF ready to email around. Fetches a
+ * fresh copy of the game payload on click so the numbers are current,
+ * then builds the file entirely in the browser (the jsPDF bundle is
+ * loaded on demand — players' phones never pay for it).
+ */
+function ExportPdfButton({
+  gameId,
+  ready,
+  onError,
+}: {
+  gameId: string;
+  ready: boolean;
+  onError: (e: unknown) => void;
+}) {
+  const [working, setWorking] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost"
+      disabled={!ready || working}
+      title={
+        ready
+          ? "Download the results — leaderboard and every question's answers — as a PDF"
+          : "Available once answers are locked (mode 3 onward)"
+      }
+      onClick={async () => {
+        setWorking(true);
+        try {
+          const detail = await adminFetch<Detail>(`/api/admin/games/${gameId}`);
+          const { downloadResultsPdf } = await import("@/lib/reportPdf");
+          await downloadResultsPdf(detail);
+        } catch (e) {
+          onError(e);
+        } finally {
+          setWorking(false);
+        }
+      }}
+    >
+      {working ? "Preparing…" : "⬇ Export PDF"}
+    </button>
+  );
+}
 
 function TitleEditor({
   title,

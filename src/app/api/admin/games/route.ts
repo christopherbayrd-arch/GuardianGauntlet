@@ -14,7 +14,7 @@ export async function GET(req: Request) {
     delete from games
     where deleted_at is not null and deleted_at < now() - interval '10 days'`;
 
-  const [games, deleted_games] = await Promise.all([
+  const [games, deleted_games, groups] = await Promise.all([
     sql`
       select g.*,
         (select count(*)::int from questions q
@@ -28,9 +28,10 @@ export async function GET(req: Request) {
       from games
       where deleted_at is not null
       order by deleted_at desc`,
+    sql`select id, name, created_at from groups order by lower(name) asc`,
   ]);
 
-  return Response.json({ games, deleted_games });
+  return Response.json({ games, deleted_games, groups });
 }
 
 export async function POST(req: Request) {
@@ -43,12 +44,23 @@ export async function POST(req: Request) {
       ? body.title.trim()
       : "Untitled game";
 
+  // Optional group assignment at creation time.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let group_id: string | null = null;
+  if (typeof body.group_id === "string" && body.group_id) {
+    if (!UUID_RE.test(body.group_id)) return jsonError(400, "Unknown group.");
+    const found = await db()`select id from groups where id = ${body.group_id}`;
+    if (found.length === 0) return jsonError(400, "Unknown group.");
+    group_id = body.group_id;
+  }
+
   // Retry a few times in the (unlikely) event of a code collision.
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const rows = await db()`
-        insert into games (code, title)
-        values (${newGameCode()}, ${title})
+        insert into games (code, title, group_id)
+        values (${newGameCode()}, ${title}, ${group_id})
         returning *`;
       return Response.json({ game: rows[0] });
     } catch (e) {

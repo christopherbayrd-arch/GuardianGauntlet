@@ -38,6 +38,13 @@ export function newGameCode(length = 5): string {
   return out;
 }
 
+/** Normalize a group name: trim, collapse inner whitespace, cap the length. */
+export function normalizeGroupName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const name = raw.replace(/\s+/g, " ").trim().slice(0, 60);
+  return name.length > 0 ? name : null;
+}
+
 export function isUniqueViolation(e: unknown): boolean {
   return (
     typeof e === "object" &&
